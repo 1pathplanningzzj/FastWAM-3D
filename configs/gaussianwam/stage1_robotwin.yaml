@@ -1,0 +1,70 @@
+output_dir: ./data/robotwin2.0/gaussian_teacher_cache
+split: train
+seed: 42
+device: cuda
+
+source:
+  dataset_dirs:
+    - ./data/robotwin2.0/robotwin2.0
+  camera_keys: [cam_high, cam_left_wrist, cam_right_wrist]
+  num_frames: 33
+  action_video_freq_ratio: 4
+  val_set_proportion: 0.01
+  is_training_set: true
+  global_sample_stride: 1
+  target_frame_policy: last_video_frame
+  start_idx: 0
+  end_idx: null
+  max_samples: null
+
+vggt_omega:
+  checkpoint_path: /data/zijianzhang/VGGT-Omega/vggt_omega_1b_512.pt
+  image_resolution: 512
+  preprocess_mode: max_size
+  dtype: bf16
+  enable_alignment: false
+
+clip:
+  enabled: true
+  model_name: openai/clip-vit-base-patch16
+  feature_dim: 512
+  dense_enabled: true
+  dense_source: patch_tokens
+  fallback: image_stats_dense
+
+text_cache:
+  dir: ./data/text_embeds_cache/robotwin
+  context_len: 128
+  encoder_id: wan22ti2v5b
+  prompt_template: "A video recorded from a robot's point of view executing the following instruction: {task}"
+
+gaussian:
+  feature_dim: 32
+  max_points: 5000
+  init_stride: 8
+  init_opacity: 0.3
+  init_scale: 0.02
+  optimize_steps: 50
+  render_height: 384
+  render_width: 320
+  target_grid_size: [24, 20]
+  lr_xyz: 1.0e-4
+  lr_scale: 1.0e-3
+  lr_opacity: 1.0e-2
+  lr_feature: 1.0e-3
+  init_feature_source: dense_target
+
+loss:
+  lambda_depth: 1.0
+  lambda_clip: 0.1
+  lambda_alpha: 0.01
+
+cache:
+  version: 2
+  overwrite: false
+  atomic_write: true
+  save_gaussian_state: true
+  save_debug_images: false
+  save_dense_feature_target: true
+  alpha_valid_threshold: 1.0e-4
+  namespace: gaussian_vggt_omega_dense_feature4x_v1

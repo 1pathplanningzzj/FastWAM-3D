@@ -1,0 +1,41 @@
+# @package _global_
+
+defaults:
+  - override /data: robotwin_gaussianwam
+  - override /model: gaussianwam
+  - _self_
+
+# dataloading
+batch_size: 16
+num_workers: 8
+
+model:
+  mot_checkpoint_mixed_attn: false
+
+# scheduler
+lr_scheduler_type: "cosine"
+learning_rate: 1e-4
+num_epochs: 5
+max_steps: null
+log_every: 10
+save_every: 2500
+eval_every: 500
+
+# training
+gradient_accumulation_steps: 1
+weight_decay: 1e-2
+resume: null
+
+gaussianwam:
+  stage: current_3d_distill
+  base_variant: uncond
+  target_tokens: video_pre_first_frame
+  teacher_targets: [dense_3d, register, depth, valid_mask]
+  lambda_now: 0.03
+  lambda_reg: 0.01
+  lambda_depth: 0.005
+  freeze:
+    action_expert: true
+    mot: true
+    video_expert_train_last_n_layers: 2
+    train_projection_heads: true
