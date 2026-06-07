@@ -6,6 +6,7 @@ device: cuda
 source:
   dataset_dirs:
     - ./data/robotwin2.0/robotwin2.0
+  subset_manifest: ./data/robotwin2.0/gaussian_teacher_subsets/demo_subset_smoke.jsonl
   camera_keys: [cam_high, cam_left_wrist, cam_right_wrist]
   num_frames: 33
   action_video_freq_ratio: 4
@@ -36,8 +37,8 @@ clip:
   dense_source: patch_tokens
   fallback: image_stats_dense
   compact:
-    require: true
-    checkpoint_path: ./checkpoints/gaussianwam/clip_pca_32d.pt
+    require: false
+    checkpoint_path: ""
 
 text_cache:
   dir: ./data/text_embeds_cache/robotwin
@@ -64,7 +65,7 @@ mosaic:
   grid_size: [24, 20]
 
 gaussian:
-  feature_dim: 32
+  feature_dim: 64
   max_points: 5000
   init_stride: 8
   init_opacity: 0.3
@@ -74,7 +75,7 @@ gaussian:
   render_width: 320
   target_grid_size: [24, 20]
   per_view_balanced_sampling: true
-  optimize_feature: false
+  optimize_feature: true
   optimize_xyz: true
   optimize_scale: true
   optimize_opacity: true
@@ -83,7 +84,7 @@ gaussian:
   lr_scale: 1.0e-3
   lr_opacity: 1.0e-2
   lr_feature: 1.0e-3
-  init_feature_source: compact_dense_target
+  init_feature_source: clip_dense_target
   alpha_valid_threshold: 1.0e-4
   min_scale: 1.0e-4
   max_scale: 0.2
@@ -101,19 +102,20 @@ loss:
   lambda_alpha_outside: 0.01
   lambda_scale: 0.001
   lambda_xyz: 0.0
-  lambda_feature_anchor: 0.0
+  lambda_feature_anchor: 0.1
 
 quality:
-  require_frozen_feature_z: true
+  require_frozen_feature_z: false
   min_render_valid_ratio: 0.15
   min_teacher_valid_ratio: 0.2
   min_teacher_render_overlap_ratio: 0.1
   min_mosaic_valid_ratio: 0.05
   min_compact_cosine: 0.05
   max_compact_cosine_drop: 0.05
+  max_feature_anchor_loss: 0.02
 
 cache:
-  version: 3
+  version: 4
   overwrite: false
   atomic_write: true
   save_gaussian_state: true
@@ -121,4 +123,4 @@ cache:
   save_dense_feature_target: true
   save_raw_clip_feature: false
   alpha_valid_threshold: 1.0e-4
-  namespace: gaussian_vggt_omega_clip_pca_frozen_feature_z_v1
+  namespace: gaussian_vggt256text_3d_first_demo_subset_v1

@@ -57,12 +57,22 @@ def depth_to_points(depth: torch.Tensor, intrinsics: torch.Tensor, extrinsics: t
     return torch.stack(points_world, dim=0)
 
 
-def make_valid_mask(depth: torch.Tensor, conf: torch.Tensor | None = None, conf_quantile: float = 0.1) -> torch.Tensor:
+def make_valid_mask(
+    depth: torch.Tensor,
+    conf: torch.Tensor | None = None,
+    conf_quantile: float = 0.1,
+    min_depth: float | None = None,
+    max_depth: float | None = None,
+) -> torch.Tensor:
     if depth.ndim == 4 and depth.shape[-1] == 1:
         depth = depth[..., 0]
     if depth.ndim == 4 and depth.shape[1] == 1:
         depth = depth[:, 0]
     mask = torch.isfinite(depth) & (depth > 0)
+    if min_depth is not None:
+        mask = mask & (depth >= float(min_depth))
+    if max_depth is not None:
+        mask = mask & (depth <= float(max_depth))
     if conf is not None:
         if conf.ndim == 4 and conf.shape[-1] == 1:
             conf = conf[..., 0]
@@ -75,15 +85,37 @@ def make_valid_mask(depth: torch.Tensor, conf: torch.Tensor | None = None, conf_
     return mask
 
 
-def sample_points(points: torch.Tensor, colors: torch.Tensor, features: torch.Tensor, mask: torch.Tensor, max_points: int, stride: int):
+def sample_points(
+    points: torch.Tensor,
+    colors: torch.Tensor,
+    features: torch.Tensor,
+    mask: torch.Tensor,
+    max_points: int,
+    stride: int,
+    *,
+    per_view_balanced: bool = True,
+):
     v, h, w, _ = points.shape
     keep = torch.zeros((v, h, w), dtype=torch.bool, device=points.device)
     keep[:, :: int(stride), :: int(stride)] = True
     keep = keep & mask
-    flat_idx = keep.reshape(-1).nonzero(as_tuple=False).flatten()
-    if flat_idx.numel() > int(max_points):
-        flat_idx = flat_idx[torch.linspace(0, flat_idx.numel() - 1, int(max_points), device=flat_idx.device).long()]
+    if per_view_balanced:
+        per_view_max = max(int(max_points) // max(v, 1), 1)
+        indices = []
+        counts = []
+        for view in range(v):
+            idx = keep[view].reshape(-1).nonzero(as_tuple=False).flatten()
+            counts.append(int(idx.numel()))
+            if idx.numel() > per_view_max:
+                idx = idx[torch.linspace(0, idx.numel() - 1, per_view_max, device=idx.device).long()]
+            indices.append(idx + view * h * w)
+        flat_idx = torch.cat(indices, dim=0) if indices else torch.empty(0, device=points.device, dtype=torch.long)
+    else:
+        flat_idx = keep.reshape(-1).nonzero(as_tuple=False).flatten()
+        counts = [int(keep[view].sum().item()) for view in range(v)]
+        if flat_idx.numel() > int(max_points):
+            flat_idx = flat_idx[torch.linspace(0, flat_idx.numel() - 1, int(max_points), device=flat_idx.device).long()]
     pts = points.reshape(-1, 3)[flat_idx]
     cols = colors.permute(0, 2, 3, 1).reshape(-1, 3)[flat_idx]
     feats = features.reshape(-1, features.shape[-1])[flat_idx]
-    return pts, cols, feats
+    return pts, cols, feats, {"candidate_points_per_view": counts, "num_points": int(flat_idx.numel())}

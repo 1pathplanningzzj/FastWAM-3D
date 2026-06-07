@@ -73,11 +73,14 @@ def get_raw_multiview_sample(dataset: BaseLerobotDataset, idx: int, camera_keys:
                 metadata[key] = value.item()
         elif isinstance(value, (str, int, float, bool)) or value is None:
             metadata[key] = value
-    image_is_pad = sample.get("image_is_pad", torch.zeros(len(camera_keys), dtype=torch.bool))
+    image_is_pad = torch.as_tensor(sample.get("image_is_pad", torch.zeros(int(target_offset) + 1, dtype=torch.bool)))
+    if image_is_pad.ndim > 0:
+        image_is_pad = image_is_pad[int(target_offset)]
+    image_is_pad = image_is_pad.reshape(())
     return RawMultiViewSample(
         global_idx=int(sample.get("idx", idx)),
         task=str(sample.get("task", metadata.get("task", ""))),
         images=images,
-        image_is_pad=torch.as_tensor(image_is_pad),
+        image_is_pad=image_is_pad.bool(),
         metadata=metadata,
     )

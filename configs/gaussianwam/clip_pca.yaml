@@ -1,0 +1,27 @@
+output_path: ./checkpoints/gaussianwam/clip_pca_32d.pt
+seed: 42
+device: cuda
+
+source:
+  dataset_dirs:
+    - ./data/robotwin2.0/robotwin2.0
+  camera_keys: [cam_high, cam_left_wrist, cam_right_wrist]
+  num_frames: 33
+  action_video_freq_ratio: 4
+  val_set_proportion: 0.01
+  is_training_set: true
+  global_sample_stride: 1
+  target_frame_policy: last_video_frame
+  start_idx: 0
+  end_idx: null
+  max_samples: null
+
+clip:
+  model_name: /data/zijianzhang/clip-vit-base-patch16
+  require_model: true
+  allow_fallback: false
+  max_patches_per_view: 64
+
+pca:
+  output_dim: 32
+  max_features: 200000

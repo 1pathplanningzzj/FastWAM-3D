@@ -74,7 +74,7 @@ gaussian:
   render_width: 320
   target_grid_size: [24, 20]
   per_view_balanced_sampling: true
-  optimize_feature: false
+  optimize_feature: true
   optimize_xyz: true
   optimize_scale: true
   optimize_opacity: true
@@ -96,21 +96,22 @@ gaussian:
 
 loss:
   lambda_depth: 1.0
-  lambda_compact: 0.1
+  lambda_compact: 0.3
   lambda_alpha: 0.01
   lambda_alpha_outside: 0.01
   lambda_scale: 0.001
   lambda_xyz: 0.0
-  lambda_feature_anchor: 0.0
+  lambda_feature_anchor: 0.2
 
 quality:
-  require_frozen_feature_z: true
+  require_frozen_feature_z: false
   min_render_valid_ratio: 0.15
   min_teacher_valid_ratio: 0.2
   min_teacher_render_overlap_ratio: 0.1
   min_mosaic_valid_ratio: 0.05
   min_compact_cosine: 0.05
   max_compact_cosine_drop: 0.05
+  max_feature_anchor_loss: 0.005
 
 cache:
   version: 3
@@ -121,4 +122,4 @@ cache:
   save_dense_feature_target: true
   save_raw_clip_feature: false
   alpha_valid_threshold: 1.0e-4
-  namespace: gaussian_vggt_omega_clip_pca_frozen_feature_z_v1
+  namespace: gaussian_vggt_omega_clip_pca_learn_feature_z_v1

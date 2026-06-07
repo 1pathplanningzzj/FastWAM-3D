@@ -31,12 +31,15 @@ class VGGTOmegaTeacher:
         images = images.to(device=self.device, dtype=torch.float32).clamp(0.0, 1.0)
         _, _, h, w = images.shape
         mode = str(self.cfg.get("preprocess_mode", "max_size"))
+        patch_size = int(self.cfg.get("patch_size", 16))
         if mode == "max_size":
             scale = self.image_resolution / max(h, w)
-            new_h = max(1, round(h * scale))
-            new_w = max(1, round(w * scale))
+            new_h = max(patch_size, round(h * scale))
+            new_w = max(patch_size, round(w * scale))
         else:
             new_h = new_w = self.image_resolution
+        new_h = max(patch_size, round(new_h / patch_size) * patch_size)
+        new_w = max(patch_size, round(new_w / patch_size) * patch_size)
         return F.interpolate(images, size=(new_h, new_w), mode="bilinear", align_corners=False)
 
     @torch.no_grad()
@@ -46,7 +49,7 @@ class VGGTOmegaTeacher:
             pred = self.model(x)
         extrinsics, intrinsics = self.encoding_to_camera(pred["pose_enc"], pred["images"].shape[-2:])
         camera_and_register = pred["camera_and_register_tokens"]
-        return {
+        out = {
             "images": pred["images"].detach(),
             "pose_enc": pred["pose_enc"].detach(),
             "extrinsics": extrinsics.detach(),
@@ -56,3 +59,7 @@ class VGGTOmegaTeacher:
             "camera_tokens": camera_and_register[:, :, :1].detach(),
             "register_tokens": camera_and_register[:, :, 1:].detach(),
         }
+        for key in ["text_alignment_embedding", "text_alignment_token"]:
+            if key in pred:
+                out[key] = pred[key].detach()
+        return out

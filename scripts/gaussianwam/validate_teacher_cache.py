@@ -32,30 +32,37 @@ def main() -> None:
         raise FileNotFoundError(f"Manifest not found: {manifest}")
     checked = 0
     errors = []
+    latest_by_sample = {}
     with manifest.open("r", encoding="utf-8") as f:
         for line in f:
             row = json.loads(line)
-            if row.get("status") != "ok":
-                continue
-            path = Path(row["path"])
-            if not path.exists():
-                errors.append(f"missing cache file: {path}")
-                continue
-            payload = torch.load(path, map_location="cpu")
-            errs = validate_payload(payload)
-            if errs:
-                errors.extend([f"{path}: {e}" for e in errs])
-            if checked == 0:
-                print("First cache summaries:")
-                for key, value in payload.get("targets", {}).items():
-                    if torch.is_tensor(value):
-                        print(key, tensor_summary(value))
-            checked += 1
-            if args.limit is not None and checked >= args.limit:
-                break
+            key = row.get("idx", row.get("cache_key"))
+            latest_by_sample[key] = row
+    for row in latest_by_sample.values():
+        if row.get("status") != "ok":
+            continue
+        path = Path(row["path"])
+        if not path.exists():
+            errors.append(f"missing cache file: {path}")
+            continue
+        payload = torch.load(path, map_location="cpu")
+        errs = validate_payload(payload, cfg)
+        if errs:
+            errors.extend([f"{path}: {e}" for e in errs])
+        if checked == 0:
+            print("First cache summaries:")
+            for key, value in payload.get("targets", {}).items():
+                if torch.is_tensor(value):
+                    print(key, tensor_summary(value))
+        checked += 1
+        if args.limit is not None and checked >= args.limit:
+            break
     print({"checked": checked, "errors": len(errors), "root": str(root)})
     for err in errors[:20]:
         print("ERROR", err)
+    if checked == 0:
+        errors.append("no ok cache entries were checked")
+        print("ERROR no ok cache entries were checked")
     if errors:
         raise SystemExit(1)
 
