@@ -307,3 +307,63 @@ robotwin_uncond_3cam_384_1e-4
   url={https://arxiv.org/abs/2603.16666}
 }
 ```
+
+## Stage 2 启动示例
+
+下面是一个在 `tmux` 后台会话中，用 `3,4,5,7` 号卡启动当前 GaussianWAM Stage 2 蒸馏训练的示例：
+
+```bash
+RUN_ID="$(date +%Y-%m-%d_%H-%M-%S)_gpus3-4-5-7_tmux"
+SESSION="fastwam_stage2_gpus3_4_5_7_$(date +%H%M%S)"
+LOG="./runs/robotwin_gaussianwam_stage2_current_3cam_384_1e-4/${RUN_ID}/launch.log"
+mkdir -p "$(dirname "$LOG")"
+
+tmux new-session -d -s "$SESSION" \
+  "cd $(pwd) && \
+   export CUDA_VISIBLE_DEVICES=3,4,5,7 RUN_ID=$RUN_ID PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+   /data/miniconda3/bin/conda run --no-capture-output -n fastwam \
+   bash scripts/train_zero1.sh 4 task=robotwin_gaussianwam_stage2_current_3cam_384_1e-4 2>&1 | tee $LOG"
+```
+
+常用查看命令：
+
+```bash
+tmux ls
+tmux attach -t "$SESSION"
+tail -f "$LOG"
+```
+
+如果你想只训练一个更小的 3-task 子集（`switch` / `microwave` / `mug`），可以用下面这个 Stage 2 启动命令：
+
+```bash
+RUN_ID="$(date +%Y-%m-%d_%H-%M-%S)_gpus3-4-5-7_tmux"
+SESSION="fastwam_stage2_focus3_gpus3_4_5_7_$(date +%H%M%S)"
+LOG="./runs/robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4/${RUN_ID}/launch.log"
+mkdir -p "$(dirname "$LOG")"
+
+tmux new-session -d -s "$SESSION" \
+  "cd $(pwd) && \
+   export CUDA_VISIBLE_DEVICES=3,4,5,7 RUN_ID=$RUN_ID PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+   /data/miniconda3/bin/conda run --no-capture-output -n fastwam \
+   bash scripts/train_zero1.sh 4 task=robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4 2>&1 | tee $LOG"
+```
+
+这个 focus3 配置会使用：
+
+- task 配置：`configs/task/robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4.yaml`
+- 子集 manifest：`data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug.jsonl`
+- 当前筛选关键词：`switch`、`microwave`、`mug`
+
+使用保存下来的 Stage 2 权重做推理：
+
+```bash
+python experiments/robotwin/run_robotwin_manager.py \
+  task=robotwin_uncond_3cam_384_1e-4 \
+  ckpt=./runs/robotwin_gaussianwam_stage2_current_3cam_384_1e-4/<run_id>/checkpoints/weights/step_002500.pt
+```
+
+当前代码路径有一个重要注意事项：
+
+- `FastWAM.save_checkpoint()` 目前会保存 `mot`、`proprio_encoder` 以及可选的 GaussianWAM heads。
+- 其中 `mot.state_dict()` 已经包含了微调后的 `video_expert` / `action_expert` 权重，分别存放在 `mixtures.video.*` 和 `mixtures.action.*` 下，所以这个 `.pt` 文件可以直接保留 Stage 2 的 policy 主干用于评测。
+- 如果你用非 GaussianWAM 的配置（例如 `task=robotwin_uncond_3cam_384_1e-4`）来加载这个 checkpoint，日志里会提示 GaussianWAM heads 被忽略；这是预期行为，只影响蒸馏辅助 head，不影响主 policy 权重。

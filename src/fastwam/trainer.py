@@ -80,12 +80,18 @@ class Wan22Trainer:
             self._assert_dataset_length_consistent(self.val_dataset, "val_dataset")
 
         # Freeze non-trainable modules before optimizer/deepspeed initialization.
-        # This keeps DiT (+ optional proprio encoder) as trainable when ZeRO builds optimizer state.
-        self._apply_dit_only_train_mode(self.model)
-        trainable_params = list(self.model.dit.parameters())
-        proprio_encoder = getattr(self.model, "proprio_encoder", None)
-        if proprio_encoder is not None:
-            trainable_params.extend(list(proprio_encoder.parameters()))
+        self._apply_train_mode(self.model)
+        trainable_named_params = [(name, param) for name, param in self.model.named_parameters() if param.requires_grad]
+        if not trainable_named_params:
+            raise RuntimeError("No trainable parameters found after applying train mode.")
+        trainable_params = [param for _, param in trainable_named_params]
+        trainable_count = sum(param.numel() for param in trainable_params)
+        trainable_roots = sorted({name.split(".")[0] for name, _ in trainable_named_params})
+        logger.info(
+            "Trainable parameters: count=%d roots=%s",
+            trainable_count,
+            ",".join(trainable_roots),
+        )
         self.optimizer = torch.optim.AdamW(
             trainable_params,
             lr=self.learning_rate,
@@ -277,11 +283,21 @@ class Wan22Trainer:
         self.accelerator.unwrap_model(self.model).load_checkpoint(str(resume_path), optimizer=None)
         logger.warning("Loaded .pt weights only; optimizer/scheduler/step were not restored under ZeRO2.")
 
-    def _set_dit_only_train_mode(self):
-        # Match DiffSynth's freeze_except("dit"): only DiT stays trainable/in-train-mode.
-        logger.info("Setting DiT to train mode and freezing other model components.")
+    def _set_train_mode(self):
         model = self.accelerator.unwrap_model(self.model)
-        self._apply_dit_only_train_mode(model)
+        self._apply_train_mode(model)
+
+    def _set_dit_only_train_mode(self):
+        self._set_train_mode()
+
+    def _apply_train_mode(self, model):
+        gaussian_enabled = bool(getattr(model, "gaussianwam_enabled", False))
+        if gaussian_enabled:
+            logger.info("Setting GaussianWAM train mode and freezing non-selected model components.")
+            self._apply_gaussianwam_train_mode(model)
+        else:
+            logger.info("Setting DiT to train mode and freezing other model components.")
+            self._apply_dit_only_train_mode(model)
 
     @staticmethod
     def _apply_dit_only_train_mode(model):
@@ -293,6 +309,52 @@ class Wan22Trainer:
         if proprio_encoder is not None:
             proprio_encoder.train()
             proprio_encoder.requires_grad_(True)
+
+    def _apply_gaussianwam_train_mode(self, model):
+        model.eval()
+        model.requires_grad_(False)
+        cfg = getattr(model, "gaussianwam_cfg", {}) or {}
+        freeze_cfg = dict(cfg.get("freeze", {}) or {})
+
+        head_specs = [
+            ("train_projection_heads", getattr(model, "gaussianwam_student_proj", None)),
+            ("train_depth_head", getattr(model, "gaussianwam_depth_head", None)),
+            ("train_alpha_head", getattr(model, "gaussianwam_alpha_head", None)),
+        ]
+        for flag_name, module in head_specs:
+            if module is not None and bool(freeze_cfg.get(flag_name, True)):
+                module.train()
+                module.requires_grad_(True)
+
+        if not bool(freeze_cfg.get("mot", True)):
+            model.mot.train()
+            model.mot.requires_grad_(True)
+
+        if bool(freeze_cfg.get("action_expert", True)):
+            model.action_expert.eval()
+            model.action_expert.requires_grad_(False)
+        else:
+            model.action_expert.train()
+            model.action_expert.requires_grad_(True)
+
+        train_last_n = int(freeze_cfg.get("video_expert_train_last_n_layers", 0) or 0)
+        if train_last_n > 0:
+            blocks = getattr(model.video_expert, "blocks", None)
+            if blocks is None:
+                raise ValueError("GaussianWAM requested video_expert last layers training, but video_expert has no `blocks`.")
+            for block in list(blocks)[-train_last_n:]:
+                block.train()
+                block.requires_grad_(True)
+            head = getattr(model.video_expert, "head", None)
+            if head is not None:
+                head.train()
+                head.requires_grad_(True)
+
+        if bool(freeze_cfg.get("train_proprio_encoder", True)):
+            proprio_encoder = getattr(model, "proprio_encoder", None)
+            if proprio_encoder is not None:
+                proprio_encoder.train()
+                proprio_encoder.requires_grad_(True)
 
     @staticmethod
     def _to_batched_eval_sample(sample):
@@ -545,8 +607,8 @@ class Wan22Trainer:
         action_l2_mean = gathered_metrics[:, 7].mean().item() if action_l2 is not None else None
         action_l1_mean = gathered_metrics[:, 8].mean().item() if action_l1 is not None else None
 
-        if was_dit_training:
-            self._set_dit_only_train_mode()
+        if was_dit_training or bool(getattr(model, "gaussianwam_enabled", False)):
+            self._set_train_mode()
 
         result = {
             "val_loss": float(mean_metrics[0].item()),
@@ -644,7 +706,7 @@ class Wan22Trainer:
         )
 
     def train(self):
-        self._set_dit_only_train_mode()
+        self._set_train_mode()
 
         unwrapped_model = self.accelerator.unwrap_model(self.model)
 

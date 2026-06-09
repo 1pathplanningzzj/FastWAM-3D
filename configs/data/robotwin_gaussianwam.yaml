@@ -2,6 +2,7 @@ train:
   _target_: fastwam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
   dataset_dirs:
     - ./data/robotwin2.0/robotwin2.0
+  episode_subset_manifest: null
   shape_meta:
     images:
       - key: cam_high
@@ -57,11 +58,31 @@ train:
         size: [240, 320]
   text_embedding_cache_dir: ./data/text_embeds_cache/robotwin
   context_len: 128
+  gaussian_teacher:
+    enabled: true
+    manifest_path: ./data/robotwin2.0/gaussian_teacher_cache/v4/gaussian_vggt256text_3d_first_demo_subset_v1/train/manifest.jsonl
+    restrict_to_cache: false
+    expected_target_offset: 32
+    expected_camera_keys: [cam_high, cam_left_wrist, cam_right_wrist]
+    expected_mosaic:
+      layout: robotwin
+      grid_size: [24, 20]
+      tiles:
+        cam_high:
+          rows: [0, 16]
+          cols: [0, 20]
+        cam_left_wrist:
+          rows: [16, 24]
+          cols: [0, 10]
+        cam_right_wrist:
+          rows: [16, 24]
+          cols: [10, 20]
 
 val:
   _target_: fastwam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
   dataset_dirs:
     - ./data/robotwin2.0/robotwin2.0/
+  episode_subset_manifest: null
   shape_meta:
     images:
       - key: cam_high
@@ -124,6 +145,6 @@ gaussian_teacher:
   targets:
     dense_3d: true
     depth: true
-    register: true
+    alpha: true
     valid_mask: true
   latent_alignment: last_frame

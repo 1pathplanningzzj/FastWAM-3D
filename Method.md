@@ -97,46 +97,50 @@ VGGT-Omega 提供强 3D prior，主要包括：
 
 ### 4.2 Gaussian Feature Field Teacher
 
-参考 Feature4X 的思路，每个 Gaussian 不只存几何和颜色，还存一个 compact latent feature。这个 Gaussian field 是 Layer 2 teacher：它先被 VGGT/CLIP 等 foundation teachers 训练出来，再作为 FastWAM Stage 2 的 teacher。
+当前第一版采用 3D-first 的 Feature4X-style 变体：Gaussian 仍然存 compact `feature_z`，但 Stage 1 的核心监督首先来自 VGGT-Omega 的 camera / depth / confidence / register / text-alignment，而不是把 CLIP/PCA 作为主线。CLIP dense feature 可以作为 optional semantic auxiliary；如果使用 compact CLIP space，它必须是全局一致的 PCA / projector，而不是每个 scene 自己学一套坐标系。
+
+```text
+VGGT-Omega 256 text-alignment checkpoint
+    -> camera / depth / confidence
+    -> register tokens
+    -> text_alignment_embedding / text_alignment_token
+    -> Gaussian 3D geometry and visibility fitting
+
+optional frozen CLIP patch feature
+    -> compact semantic feature target
+    -> auxiliary Gaussian feature_z supervision
+```
+
+每个 Gaussian 存：
 
 ```text
 g_i = {
   xyz,
   scale,
-  rotation,
+  rotation optional,
   opacity,
-  color / SH,
-  feature_z
+  color / SH optional,
+  feature_z  # frozen global compact CLIP feature
 }
 ```
 
-`feature_z` 可以设为比较小的维度，例如 32 / 64 / 128。Gaussian renderer 可以渲染出：
+第一版 Gaussian fitting 只优化 geometry / visibility 相关参数：
 
 ```text
-rendered RGB
+optimize: xyz / scale / opacity
+freeze:   feature_z
+```
+
+Gaussian renderer 渲染出：
+
+```text
 rendered depth
 rendered alpha
-rendered feature_map
+rendered compact feature_map
+valid mask
 ```
 
-然后使用 decoder heads 把 compact rendered feature 映射到不同 teacher feature space：
-
-```text
-D_vae(feature_map)   -> Wan VAE token space
-D_vggt(feature_map)  -> VGGT dense feature space
-D_sem(feature_map)   -> SAM / DINO / object feature space
-D_reg(pool(feature)) -> VGGT register / global space
-```
-
-Feature4X 的核心思想是：**Gaussian 里存 compact feature，渲染到 2D view 后，再通过 head decode 到目标 2D feature space。**
-
-这里可以把 Feature4X 原来对齐的 SAM2 / InternVideo / LangSeg 特征，替换或扩展成：
-
-- Wan VAE token；
-- VGGT dense feature；
-- VGGT register token；
-- depth / point feature；
-- object / semantic feature。
+这样 Gaussian 的作用是 3D fusion、view consistency 和 camera-aware rendering cache，而不是每个 scene 学一套新的 semantic representation。后续如果 frozen `feature_z` 的表达力不足，再考虑在 strong anchor loss 下轻微优化 `feature_z`，或把 PCA 换成训练好的全局 autoencoder/projector。
 
 ### 4.3 可选 Semantic / Object Teacher
 
@@ -262,17 +266,52 @@ z2 对齐 I8 的 3D teacher
 
 ## 7. Loss 设计
 
-整体 loss 可以写成：
+当前已生成的 Gaussian teacher cache 可以作为 Stage 2 smoke 的第一批数据：
+
+```text
+ok cache: 32921
+pt files: 32921
+rejected: 0
+```
+
+抽样 500 个 `.pt` 的质量统计显示 fitting 不是空跑：`final_compact_cosine` mean 约 0.330，`cosine_delta` mean 约 +0.026，只有 2 / 500 为负；`T_valid_mask_mosaic` coverage mean 约 0.453，`teacher_render_overlap_ratio` mean 约 0.392，说明 rendered teacher 不是空渲染；`final_depth_error` mean 约 0.328，`depth_mask_mean` mean 约 0.673，depth target 有非平凡分布；`loss_feature_anchor` mean 约 0.009 且 max 约 0.013，低于 0.02 阈值，说明 feature_z 有学习但没有明显漂移；同一 demo 相邻 video-stride timestep 的 pooled feature cosine mean 约 0.984，temporal consistency 稳定。
+
+Stage 2 v0 不建议只拿一个 feature，而是从 dense / depth / alpha 三个最直接的 teacher target 小权重一起开：
+
+```text
+core dense target:
+  T_gaussian_feature_mosaic [24,20,64]
+  T_valid_mask_mosaic       [24,20]
+
+core geometry target:
+  T_depth_mosaic            [24,20]
+
+aux visibility target:
+  T_alpha_mosaic            [24,20]
+  T_valid_mask_mosaic       [24,20]
+```
+
+整体 loss：
 
 ```text
 L_total = L_video
         + L_action
-        + lambda_now    * L_3d_current
-        + lambda_future * L_3d_future
-        + lambda_reg    * L_reg_3d
-        + lambda_depth  * L_depth
-        + lambda_obj    * L_object
+        + lambda_dense * L_gaussian_dense
+        + lambda_depth * L_depth
+        + lambda_alpha * L_alpha
 ```
+
+推荐初始权重保持很小，先验证 action / video loss 不崩：
+
+```text
+lambda_dense = 0.01
+lambda_depth = 0.01
+lambda_alpha = 0.005
+```
+
+其中 `L_gaussian_dense` 用 masked cosine / REPA-style projector alignment，让 FastWAM video tokens 学 3D-aware dense representation；`L_depth` 用 `DepthHead(video_tokens) -> T_depth_mosaic` 的 masked L1，提供最明确的几何监督；`L_alpha` 用 `AlphaHead(video_tokens) -> T_alpha_mosaic` 的 masked L1 或 BCE，让 token 学 reliable geometry / visibility 区域。
+
+VGGT register 和 text-alignment embedding 先作为 Stage 2 v1/v2 的 global auxiliary，不在第一版同时打开：`T_register` 是 `[1,3,16,2048]` 的 global/register-ish token，不是 spatial mosaic；`T_vggt_text_alignment_embedding` 是 `[1,2048]` 的 global language-aligned scene embedding，建议等 dense/depth/alpha 稳定后再加 `pool(video_tokens) -> text_alignment_embedding`。
 
 ### 7.1 原始 FastWAM Loss
 
@@ -379,18 +418,25 @@ L_object = cosine_loss(obj_pred, stopgrad(object_teacher_feature))
 
 ### Stage 1: Foundation Teachers -> Gaussian Field Teacher
 
-先离线运行 foundation teachers，并把它们的输出蒸馏/拟合进 Gaussian feature field：
+先离线选择 demo / episode 子集，然后对这些 demo 内的 video-stride timesteps 完整生成 Gaussian teacher cache：
 
 ```text
-images / multi-view frames
-    -> VGGT-Omega camera / depth / confidence / register
-    -> CLIP/DINO/SAM-like dense feature maps
-    -> optimize per-sample Gaussian xyz / scale / opacity / feature_z
+RoboTwin episodes
+    -> select N demos per task
+    -> sample full video-stride timesteps inside each selected demo
+
+multi-view target frames
+    -> VGGT-Omega 256 text-alignment model
+    -> camera / depth / confidence / register / text-alignment outputs
+    -> optional frozen CLIP dense semantic feature
+    -> initialize Gaussian geometry and feature_z
+    -> optimize per-sample Gaussian xyz / scale / opacity / optional feature_z with anchor
     -> camera-aware render T_gaussian_feature / T_depth / T_alpha / valid masks
+    -> compose FastWAM-aligned mosaic teacher target
     -> save Gaussian teacher cache
 ```
 
-这样训练 FastWAM 时不需要每个 step 都跑重型 3D branch，可以显著降低训练成本。旧的 broadcast-feature cache 只能作为 pipeline smoke test；正式 Stage 2 应使用 dense Feature4X-style Gaussian teacher cache。
+这样训练 FastWAM 时不需要每个 step 都跑重型 3D branch，也不需要对 600 万个 timestep 全量预计算。Stage 2 在有 teacher cache 的 demo/timestep 上加 3D distillation loss，在没有 teacher 的普通样本上保留原始 FastWAM loss。
 
 ### Stage 2: Current 3D State Distillation
 

@@ -56,3 +56,14 @@ action_scheduler:
 
 loss:
   lambda_action: 1.0
+
+gaussianwam:
+  enabled: ${gaussianwam.enabled}
+  stage: ${gaussianwam.stage}
+  target_tokens: ${gaussianwam.target_tokens}
+  teacher_targets: ${gaussianwam.teacher_targets}
+  teacher_feature_dim: ${gaussianwam.teacher_feature_dim}
+  lambda_dense: ${gaussianwam.lambda_dense}
+  lambda_depth: ${gaussianwam.lambda_depth}
+  lambda_alpha: ${gaussianwam.lambda_alpha}
+  freeze: ${gaussianwam.freeze}

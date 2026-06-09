@@ -57,7 +57,7 @@ Stage 1: Foundation teachers -> Gaussian feature field teacher + cache
 Stage 2: Gaussian feature field teacher -> FastWAM student
 ```
 
-Stage 1 会有训练/优化，但训练对象是 **离线 Gaussian feature field teacher**，不是 FastWAM。它类似 `data/text_embeds_cache/` 的思想：把训练中昂贵、可复用的 teacher 输出提前算好；区别是 text cache 只需要 frozen T5 forward，而 Gaussian teacher cache 需要 per-sample / per-clip 地把 VGGT-Omega 几何和 CLIP/DINO/SAM-like dense semantic features 蒸馏进 Gaussian `feature_z`。
+Stage 1 会有离线拟合，但训练对象是 **选中 demo/timestep 的 Gaussian teacher cache**，不是 FastWAM。第一版不对 600 万个 timestep 全量预计算，而是按 task 选择少量 demo / episode，并对这些 demo 内的 video-stride timesteps 完整生成 teacher。Stage 1 的核心是 VGGT-Omega 256 text-alignment checkpoint 提供 camera / depth / confidence / register / text-alignment outputs，Gaussian fitting 负责把这些 3D 信息组织成 camera-aware、mosaic-aligned teacher cache。CLIP/PCA 可以作为 optional semantic auxiliary，不作为第一版 3D teacher 的主线。
 
 ## 4. 关键监督位置
 
@@ -104,22 +104,27 @@ video_expert.post_dit(...) output
 Stage 1 目标是先把 foundation teachers 的几何和语义信号蒸馏进离线 Gaussian feature field，再生成可复用 teacher cache：
 
 ```text
-RoboTwin original multi-view frames
-    -> VGGT-Omega frozen forward: camera / depth / confidence / register
-    -> CLIP or future DINO/SAM-like dense feature extraction
+RoboTwin task demonstrations
+    -> select N demos per task
+    -> sample complete video-stride timesteps in selected demos
+    -> original multi-view target frames
+    -> VGGT-Omega 256 text-alignment frozen forward:
+         camera / depth / confidence / register / text_alignment_embedding
+    -> optional CLIP dense feature auxiliary
     -> initialize Gaussian geometry / feature_z
-    -> optimize Gaussian feature field against dense teacher maps
-    -> camera-aware render feature / depth / alpha / semantic map
-    -> save teacher cache for FastWAM Stage 2
+    -> optimize Gaussian xyz / scale / opacity / optional anchored feature_z
+    -> camera-aware render feature / depth / alpha
+    -> compose FastWAM-aligned mosaic teacher cache for Stage 2
 ```
 
 这个阶段和 FastWAM 训练代码尽量解耦，方便独立调试 VGGT-Omega、CLIP/dense teacher features、camera convention、Gaussian renderer、optimization 和 cache key 对齐。PNG/debug 图只用于人眼检查；真正用于 Stage 2 的是 `.pt` cache 中的 tensor targets。
 
 ### 5.2 输入
 
-RoboTwin 每个样本优先使用原始多视角输入，而不是 FastWAM 拼接后的 2D 图：
+RoboTwin Stage 1 不直接遍历全部 timestep，而是先构建 demo / episode 子集。每个选中的 demo 内按 video stride 取完整 target timesteps，并优先使用原始多视角输入，而不是 FastWAM 拼接后的 2D 图：
 
 ```text
+selected task demos / episodes
 multi-view images / video frames
 camera metadata if available
 instruction
@@ -138,10 +143,17 @@ VGGT-Omega 权重位置：
 /data/zijianzhang/VGGT-Omega/vggt_omega_1b_256_text.pt
 ```
 
-第一版默认使用：
+第一版 Stage 1 demo-subset teacher 默认使用 text-alignment 版本：
 
 ```text
-/data/zijianzhang/VGGT-Omega/vggt_omega_1b_512.pt
+/data/zijianzhang/VGGT-Omega/vggt_omega_1b_256_text.pt
+```
+
+配置上应使用：
+
+```yaml
+image_resolution: 256
+enable_alignment: true
 ```
 
 VGGT-Omega forward 提供：
@@ -181,7 +193,7 @@ CLIP text feature from instruction          -> language-conditioned semantic sig
 - object boundary / region relevance；
 - `blocks_ranking_rgb`、`blocks_ranking_size`、`pick_diverse_bottles`、`hanging_mug` 等任务。
 
-第一版 Stage 1 应优先使用 frozen CLIP image encoder 的 dense/patch feature 作为 per-view feature map。如果本地 CLIP patch token 不可用，fallback 也应该是空间变化的 dense feature（例如 RGB + xy + depth/confidence + image stats），而不是把图像级 CLIP feature 简单 broadcast 到整张图。broadcast 只能作为 ablation，不能作为正式 Gaussian teacher 质量依据。
+第一版 Stage 1 使用 frozen CLIP image encoder 的 dense/patch feature 作为 per-view semantic teacher，并通过全局 PCA / projector 压到 32D 或 64D compact feature space。这个 compact space 只拟合一次并 frozen，保证所有样本的 `feature_z` 坐标系一致。如果本地 CLIP patch token 不可用，Stage 1 正式缓存应直接失败；fallback dense feature 只能作为 debug / ablation，不能作为正式 Gaussian teacher 质量依据。broadcast 图像级 CLIP feature 也只能作为 ablation。
 
 ### 5.5 Gaussian Feature Field
 
@@ -198,17 +210,21 @@ g_i = {
 }
 ```
 
-`feature_z` 是核心。第一版建议用 32 / 64 维，承载几何 + 语义混合信息：
+`feature_z` 是核心，但第一版不让它成为 per-scene 自由 latent。第一版建议用 32 / 64 维，来自 frozen CLIP patch feature 的全局 PCA / projector compact space，并在 per-sample Gaussian fitting 中默认冻结：
 
 ```text
-feature_z = compact(
-  geometry signal,
-  VGGT register / dense signal,
-  CLIP semantic signal
+feature_z = frozen_global_compact(
+  CLIP dense patch semantic signal
 )
+
+optimize per sample:
+  xyz / scale / opacity / alpha visibility
+
+freeze per sample:
+  feature_z
 ```
 
-渲染后得到：
+VGGT-Omega 主要通过 depth / camera / confidence 约束几何和可见性，而不是让每个 scene 学出自己的语义坐标系。渲染后得到：
 
 ```text
 G_feature_map   view-consistent 3D feature map
@@ -234,29 +250,23 @@ D_depth(G_feature_map) -> depth / point space optional
 Stage 1 拟合 Gaussian teacher 时，可以使用：
 
 ```text
-L_gaussian = lambda_depth * L_depth_render
-           + lambda_clip  * L_clip_feature
-           + lambda_reg   * L_register
-           + lambda_alpha * L_alpha_reg
-           + optional L_rgb
+L_gaussian = lambda_depth   * L_depth_render
+           + lambda_compact * L_compact_feature
+           + lambda_alpha   * L_alpha_reg
+           + lambda_scale   * L_scale_reg
+           + optional lambda_xyz * L_xyz_drift
 ```
 
 其中：
 
 ```text
-L_depth_render = masked_l1(rendered_depth, stopgrad(VGGT_depth))
-L_clip_feature = cosine_loss(D_clip(rendered_feature), stopgrad(CLIP_feature))
-L_register     = cosine_loss(D_reg(pool(rendered_feature)), stopgrad(VGGT_register))
-L_alpha_reg    = visibility / opacity regularization
+L_depth_render    = masked_l1(rendered_depth, stopgrad(VGGT_depth))
+L_compact_feature = cosine_loss(rendered_feature, stopgrad(CLIP_PCA_feature))
+L_alpha_reg       = visibility / opacity regularization, including outside-mask penalty
+L_scale_reg       = keep splat scale bounded
 ```
 
-第一版推荐从简单版本开始：
-
-```text
-L_depth_render + L_clip_feature + L_alpha_reg
-```
-
-如果 `VGGT_register` 对齐稳定，再加 `L_register`。
+第一版推荐冻结 `feature_z`，让 feature cosine 主要推动 geometry / scale / opacity 找到更好的 view-consistent rendering，而不是让每个 scene 通过优化 `feature_z` 拟合一个不可泛化的语义空间。若后续确实需要优化 `feature_z`，必须加入 strong anchor loss 到 frozen compact target。
 
 ### 5.7 Cache 保存内容
 
@@ -268,25 +278,30 @@ trajectory_id
 frame_index
 latent_step_index
 camera_id / view_id
-T_gaussian_feature
-T_depth
-T_alpha
-T_valid_mask
+T_gaussian_feature              per-view [V,Hv,Wv,D]
+T_depth                         per-view [V,Hv,Wv]
+T_alpha                         per-view [V,Hv,Wv]
+T_valid_mask                    per-view [V,Hv,Wv]
+T_gaussian_feature_mosaic       FastWAM-aligned [24,20,D]
+T_depth_mosaic                  FastWAM-aligned [24,20]
+T_alpha_mosaic                  FastWAM-aligned [24,20]
+T_valid_mask_mosaic             FastWAM-aligned [24,20]
 T_clip_feature optional
 T_register optional
 camera_info
 vggt_confidence
 gaussian_meta
+compact_feature_meta
 ```
 
 其中最核心的是：
 
 ```text
-T_gaussian_feature
-T_valid_mask
+T_gaussian_feature_mosaic
+T_valid_mask_mosaic
 ```
 
-Stage 2 会把 `T_gaussian_feature` resize / patchify 到 FastWAM token grid，然后和 `video_pre["tokens"]` 做 REPA-style distillation。
+Stage 2 会把 `T_gaussian_feature_mosaic` reshape / patchify 到 FastWAM token grid，然后和 `video_pre["tokens"]` 做 REPA-style distillation。
 
 ### 5.8 时间和空间对齐
 
@@ -344,15 +359,22 @@ L_video  = video latent diffusion target MSE
 L_action = action diffusion target MSE
 ```
 
-额外加入 REPA-style alignment：
+额外加入三个小权重 teacher losses：
 
 ```text
 S0 = video_pre["tokens"] first-frame tokens
-T0 = cached rendered Gaussian feature tokens
+T_dense = cached T_gaussian_feature_mosaic tokens
+T_depth = cached T_depth_mosaic tokens
+T_alpha = cached T_alpha_mosaic tokens
+M_valid = cached T_valid_mask_mosaic tokens
 
-L_repa_3d_sem = - mean(
-  normalize(P_student(S0)) · normalize(P_teacher(T0))
+L_gaussian_dense = -masked_mean(
+  normalize(P_student(S0)) · normalize(P_teacher(T_dense)),
+  M_valid
 )
+
+L_depth = masked_l1(DepthHead(S0), stopgrad(T_depth), M_valid)
+L_alpha = masked_l1_or_bce(AlphaHead(S0), stopgrad(T_alpha), M_valid)
 ```
 
 整体 loss 第一版建议：
@@ -360,18 +382,12 @@ L_repa_3d_sem = - mean(
 ```text
 L_total = L_video
         + L_action
-        + lambda_gaussian * L_repa_3d_sem
+        + 0.01  * L_gaussian_dense
+        + 0.01  * L_depth
+        + 0.005 * L_alpha
 ```
 
-可选再加：
-
-```text
-+ lambda_depth * L_depth
-+ lambda_reg   * L_reg
-+ lambda_clip  * L_clip_semantic
-```
-
-但建议第一版 Stage 2 先只开 `L_repa_3d_sem`，等 action eval 不退化后再加 depth/register/clip auxiliary loss。
+Stage 2 v0 先使用 dense Gaussian feature、depth、alpha / valid mask 三类 spatial mosaic target。`T_register` 和 `T_vggt_text_alignment_embedding` 先不打开，因为它们是 global/register-ish target，不是 spatial mosaic；等 dense/depth/alpha loss 正常下降且 video/action loss 不崩后，再作为 global auxiliary 加入。
 
 ### 6.2 Projection heads
 
@@ -398,17 +414,43 @@ video_expert last 2 layers or adapter optional
 
 不建议第一版 full fine-tune 全模型。
 
-### 6.3 最小训练实验
+### 6.3 Stage 2 smoke 训练实验
 
-最小实验只做：
+当前已生成 cache 可先用于 Stage 2 smoke：
+
+```text
+ok cache: 32921
+pt files: 32921
+rejected: 0
+```
+
+抽样 500 个 `.pt` 的质量统计支持先开 Stage 2：
+
+```text
+final_compact_cosine mean: 0.3302
+cosine_delta mean: +0.0257, negative: 2 / 500
+T_valid_mask_mosaic coverage mean: 0.4528
+teacher_render_overlap_ratio mean: 0.3924
+final_depth_error mean: 0.3275
+depth_mask_mean mean: 0.6727
+loss_feature_anchor mean: 0.0090, max: 0.0132, threshold: 0.02
+temporal pooled feature cosine mean: 0.9835, min: 0.9418
+```
+
+这说明 fitting 有效、不是空渲染，depth target 有非平凡分布，feature_z 没有大幅漂移，同一 demo 的 temporal consistency 稳定。
+
+smoke 实验先做：
 
 ```text
 Target token: video_pre["tokens"] first-frame tokens
-Teacher: current-frame rendered Gaussian feature map with VGGT geometry + CLIP semantic signal
-Loss: REPA-style normalized cosine alignment
+Dense teacher: T_gaussian_feature_mosaic [24,20,64] + T_valid_mask_mosaic [24,20]
+Depth teacher: T_depth_mosaic [24,20]
+Alpha teacher: T_alpha_mosaic [24,20]
+Loss: masked cosine / REPA-style dense alignment + masked depth L1 + masked alpha L1 or BCE
 Original losses: keep L_video + L_action
 Frozen: action_expert frozen, most video_expert frozen
-Trainable: projection head + video_expert last 2 layers or adapter
+Trainable: projection heads + depth/alpha heads + video_expert last 2 layers or adapter
+Initial weights: 0.01 dense, 0.01 depth, 0.005 alpha
 ```
 
 伪代码：
@@ -431,9 +473,14 @@ M0 = gaussian_valid_mask_current_aligned
 
 S_proj = normalize(P_student(S0), dim=-1)
 T_proj = normalize(P_teacher(T0).detach(), dim=-1)
-loss_repa_3d_sem = -masked_mean((S_proj * T_proj).sum(dim=-1), M0)
+loss_gaussian_dense = -masked_mean((S_proj * T_proj).sum(dim=-1), M0)
+loss_depth = masked_l1(depth_head(S0), T_depth.detach(), M0)
+loss_alpha = masked_l1_or_bce(alpha_head(S0), T_alpha.detach(), M0)
 
-loss = loss_video + loss_action + lambda_gaussian * loss_repa_3d_sem
+loss = (loss_video + loss_action
+        + 0.01 * loss_gaussian_dense
+        + 0.01 * loss_depth
+        + 0.005 * loss_alpha)
 ```
 
 ## 7. 当前不做的事情
@@ -445,6 +492,8 @@ future 3D distillation
 online Gaussian optimization inside FastWAM training
 inference-time Gaussian branch
 action-region weighted loss
+T_register global auxiliary
+T_vggt_text_alignment_embedding global auxiliary
 joint/idm GaussianWAM variants
 large-scale action_expert fine-tuning
 ```
@@ -472,20 +521,23 @@ Stage 2 训练指标：
 ```text
 loss_video
 loss_action
-loss_repa_3d_sem
+loss_gaussian_dense
+loss_depth
+loss_alpha
 loss_total
-student-teacher cosine similarity
+student-teacher dense cosine similarity
 valid_mask coverage
+predicted depth error
+predicted alpha error
 ```
 
-如果启用辅助 loss，再记录：
+如果后续启用 global auxiliary，再记录：
 
 ```text
 loss_reg
-loss_depth
-loss_clip_semantic
-current depth error
+loss_text_alignment
 register cosine similarity
+text_alignment cosine similarity
 ```
 
 任务指标：
@@ -516,8 +568,9 @@ hanging_mug
 - Stage 1 Gaussian fitting loss 能下降；
 - rendered depth / alpha / feature PCA 看起来合理；
 - CLIP feature cosine 有提升；
-- Stage 2 `loss_repa_3d_sem` 明显下降；
-- student-teacher cosine similarity 上升；
+- Stage 2 `loss_gaussian_dense` / `loss_depth` / `loss_alpha` 正常下降；
+- student-teacher dense cosine similarity 上升；
+- predicted depth / alpha error 下降；
 - `loss_video` / `loss_action` 没有明显恶化；
 - action eval 不下降或小幅提升；
 - 3D-heavy / semantic-heavy tasks 有改善迹象。
@@ -537,20 +590,20 @@ hanging_mug
 如果 Stage 2 distillation 下降但 action eval 下降：
 
 ```text
-降低 lambda_gaussian
+优先降低 lambda_dense / lambda_depth / lambda_alpha
 冻结更多 video/action 参数
-只训练 projection head 或 adapter
+只训练 projection heads / depth head / alpha head 或 adapter
 延后解冻 mot/action_expert
 ```
 
-如果 Stage 2 `loss_repa_3d_sem` 不下降：
+如果 Stage 2 dense / depth / alpha loss 不下降：
 
 ```text
 teacher target 和 student token 网格没对齐
-projection head 太弱
+projection head 或 depth/alpha head 太弱
 teacher feature normalization 有问题
 valid mask / resize / patchify 有问题
-CLIP / Gaussian feature scale 不匹配
+Gaussian feature / depth / alpha target scale 不匹配
 ```
 
 ## 10. 简短总结

@@ -306,3 +306,63 @@ If you find our work helpful, please consider citing:
   url={https://arxiv.org/abs/2603.16666}
 }
 ```
+
+## Stage 2 Launch Example
+
+Example command to launch the current GaussianWAM Stage 2 distillation training on GPUs `3,4,5,7` in a detached `tmux` session:
+
+```bash
+RUN_ID="$(date +%Y-%m-%d_%H-%M-%S)_gpus3-4-5-7_tmux"
+SESSION="fastwam_stage2_gpus3_4_5_7_$(date +%H%M%S)"
+LOG="./runs/robotwin_gaussianwam_stage2_current_3cam_384_1e-4/${RUN_ID}/launch.log"
+mkdir -p "$(dirname "$LOG")"
+
+tmux new-session -d -s "$SESSION" \
+  "cd $(pwd) && \
+   export CUDA_VISIBLE_DEVICES=3,4,5,7 RUN_ID=$RUN_ID PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+   /data/miniconda3/bin/conda run --no-capture-output -n fastwam \
+   bash scripts/train_zero1.sh 4 task=robotwin_gaussianwam_stage2_current_3cam_384_1e-4 2>&1 | tee $LOG"
+```
+
+Useful follow-up commands:
+
+```bash
+tmux ls
+tmux attach -t "$SESSION"
+tail -f "$LOG"
+```
+
+Focused 3-task Stage 2 training example (`switch` / `microwave` / `mug` subset only):
+
+```bash
+RUN_ID="$(date +%Y-%m-%d_%H-%M-%S)_gpus3-4-5-7_tmux"
+SESSION="fastwam_stage2_focus3_gpus3_4_5_7_$(date +%H%M%S)"
+LOG="./runs/robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4/${RUN_ID}/launch.log"
+mkdir -p "$(dirname "$LOG")"
+
+tmux new-session -d -s "$SESSION" \
+  "cd $(pwd) && \
+   export CUDA_VISIBLE_DEVICES=3,4,5,7 RUN_ID=$RUN_ID PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+   /data/miniconda3/bin/conda run --no-capture-output -n fastwam \
+   bash scripts/train_zero1.sh 4 task=robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4 2>&1 | tee $LOG"
+```
+
+This focused config uses:
+
+- task config: `configs/task/robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4.yaml`
+- subset manifest: `data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug.jsonl`
+- selected episodes matched by keywords: `switch`, `microwave`, `mug`
+
+Inference with a saved Stage 2 weight checkpoint:
+
+```bash
+python experiments/robotwin/run_robotwin_manager.py \
+  task=robotwin_uncond_3cam_384_1e-4 \
+  ckpt=./runs/robotwin_gaussianwam_stage2_current_3cam_384_1e-4/<run_id>/checkpoints/weights/step_002500.pt
+```
+
+Important note for the current codepath:
+
+- `FastWAM.save_checkpoint()` saves `mot`, `proprio_encoder`, and optional GaussianWAM heads.
+- The saved `mot.state_dict()` already includes the finetuned `video_expert` / `action_expert` weights under `mixtures.video.*` and `mixtures.action.*`, so the `.pt` file preserves the Stage 2 policy backbone for direct evaluation.
+- If you evaluate this checkpoint with a non-GaussianWAM config such as `task=robotwin_uncond_3cam_384_1e-4`, the loader will warn that GaussianWAM heads are ignored. This is expected and only affects the auxiliary distillation heads, not the main policy weights.

@@ -1,3 +1,4 @@
+import json
 import torch
 import numpy as np
 from pathlib import Path
@@ -15,6 +16,110 @@ logger = get_logger(__name__)
 MAX_GETITEM_ATTEMPT = 5
 
 class BaseLerobotDataset(torch.utils.data.Dataset):
+    @staticmethod
+    def _resolve_existing_path(path_value: str | Path) -> Path:
+        path = Path(path_value)
+        candidates = [path]
+        if not path.is_absolute():
+            candidates.append(Path.cwd() / path)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(f"Episode subset manifest not found: {path_value}")
+
+    @staticmethod
+    def _canonical_dataset_dir(ds_dir: str | Path) -> str:
+        return str(Path(ds_dir).resolve())
+
+    @classmethod
+    def _load_episode_subset_map(
+        cls,
+        dataset_dirs: List[str],
+        episode_subset_manifest: Optional[str],
+    ) -> Optional[dict[str, list[int]]]:
+        if episode_subset_manifest is None:
+            return None
+
+        manifest_path = cls._resolve_existing_path(episode_subset_manifest)
+        canonical_dirs = {cls._canonical_dataset_dir(ds_dir): ds_dir for ds_dir in dataset_dirs}
+        default_dataset_dir = dataset_dirs[0] if len(dataset_dirs) == 1 else None
+        subset_map: dict[str, set[int]] = {}
+
+        def resolve_dataset_dir(raw_value: Optional[str]) -> str:
+            if raw_value is None:
+                if default_dataset_dir is None:
+                    raise ValueError(
+                        "Episode subset manifest must specify dataset_dir/repo_id when multiple datasets are used."
+                    )
+                return default_dataset_dir
+
+            candidate = Path(raw_value)
+            candidate_keys = [
+                str(candidate),
+                cls._canonical_dataset_dir(candidate),
+                candidate.name,
+            ]
+            for ds_dir in dataset_dirs:
+                ds_path = Path(ds_dir)
+                if ds_dir in candidate_keys or str(ds_path) in candidate_keys:
+                    return ds_dir
+                if cls._canonical_dataset_dir(ds_path) in candidate_keys or ds_path.name in candidate_keys:
+                    return ds_dir
+            if default_dataset_dir is not None:
+                return default_dataset_dir
+            raise ValueError(f"Unknown dataset key in episode subset manifest: {raw_value}")
+
+        def add_episode(dataset_key: Optional[str], episode_index: Any):
+            ds_dir = resolve_dataset_dir(dataset_key)
+            subset_map.setdefault(ds_dir, set()).add(int(episode_index))
+
+        if manifest_path.suffix == ".json":
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and "episode_indices" in payload:
+                dataset_key = payload.get("dataset_dir") or payload.get("repo_id") or payload.get("dataset")
+                for episode_index in payload["episode_indices"]:
+                    add_episode(dataset_key, episode_index)
+            elif isinstance(payload, dict):
+                for dataset_key, episode_indices in payload.items():
+                    for episode_index in episode_indices:
+                        add_episode(dataset_key, episode_index)
+            elif isinstance(payload, list):
+                for episode_index in payload:
+                    add_episode(None, episode_index)
+            else:
+                raise TypeError(f"Unsupported episode subset JSON payload type: {type(payload)}")
+        else:
+            with manifest_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    if isinstance(row, int):
+                        add_episode(None, row)
+                        continue
+                    dataset_key = row.get("dataset_dir") or row.get("repo_id") or row.get("dataset")
+                    episode_index = row.get("episode_index", row.get("episode"))
+                    if episode_index is None:
+                        raise ValueError(
+                            "Episode subset manifest rows must provide `episode_index` or `episode`."
+                        )
+                    add_episode(dataset_key, episode_index)
+
+        normalized_subset_map = {
+            ds_dir: sorted(indices)
+            for ds_dir, indices in subset_map.items()
+        }
+        if not normalized_subset_map:
+            raise ValueError(f"Episode subset manifest is empty: {manifest_path}")
+
+        logger.info(
+            "Loaded episode subset manifest: path=%s datasets=%s",
+            manifest_path,
+            {ds_dir: len(indices) for ds_dir, indices in normalized_subset_map.items()},
+        )
+        return normalized_subset_map
+
     def __init__(
         self,
         dataset_dirs: List[str],
@@ -33,6 +138,7 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
 
         # sampling
         global_sample_stride: int = 1,
+        episode_subset_manifest: Optional[str] = None,
     ):
         assert len(dataset_dirs) > 0, "At least one dataset directory is required"
         assert past_action_size == 0
@@ -57,6 +163,7 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
         fps = fps_list[0]
         
         self.global_sample_stride = global_sample_stride
+        self.episode_subset_manifest = episode_subset_manifest
 
         self.val_set_proportion = val_set_proportion
         self.is_training_set = is_training_set
@@ -85,21 +192,35 @@ class BaseLerobotDataset(torch.utils.data.Dataset):
             meta["lerobot_key"] = f"action.{key}" if key != "default" else "action"
             delta_timestamps[meta["lerobot_key"]] = [(t * global_sample_stride) / fps for t in range(-past_action_size, -past_action_size + action_size)]
 
+        subset_map = self._load_episode_subset_map(dataset_dirs, episode_subset_manifest)
         episodes = {}
         if val_set_proportion < 1e-6:
             for meta in metas:
-                episodes.update({meta.repo_id: list(range(meta.total_episodes))})
+                candidate_episodes = subset_map.get(meta.repo_id) if subset_map is not None else None
+                if candidate_episodes is None:
+                    candidate_episodes = list(range(meta.total_episodes))
+                episodes.update({meta.repo_id: candidate_episodes})
         else:
             for meta in metas:
-                split_idx = int(meta.total_episodes * (1 - val_set_proportion))
+                candidate_episodes = subset_map.get(meta.repo_id) if subset_map is not None else None
+                if candidate_episodes is None:
+                    episode_indices = list(range(meta.total_episodes))
+                else:
+                    episode_indices = list(candidate_episodes)
+                    invalid_indices = [idx for idx in episode_indices if idx < 0 or idx >= meta.total_episodes]
+                    if invalid_indices:
+                        raise ValueError(
+                            f"Episode subset manifest contains invalid episode indices for {meta.repo_id}: "
+                            f"{invalid_indices[:10]}"
+                        )
+                split_idx = int(len(episode_indices) * (1 - val_set_proportion))
                 # random shuffle episode indices before splitting
-                episode_indices = list(range(meta.total_episodes))
                 rng = np.random.default_rng(seed)
                 rng.shuffle(episode_indices)
                 if self.is_training_set:
                     episodes.update({meta.repo_id: [episode_indices[i] for i in range(split_idx)]})
                 else:
-                    episodes.update({meta.repo_id: [episode_indices[i] for i in range(split_idx, meta.total_episodes)]})
+                    episodes.update({meta.repo_id: [episode_indices[i] for i in range(split_idx, len(episode_indices))]})
 
         self.multi_dataset = MultiLeRobotDataset(
             dataset_dirs=self.dataset_dirs,

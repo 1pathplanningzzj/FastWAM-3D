@@ -26,6 +26,12 @@ gradient_accumulation_steps: 1
 weight_decay: 1e-2
 resume: /data/zijianzhang/FastWAM/checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt
 
+data:
+  train:
+    episode_subset_manifest: ./data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug.jsonl
+  val:
+    episode_subset_manifest: ./data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug.jsonl
+
 gaussianwam:
   enabled: true
   stage: current_3d_distill

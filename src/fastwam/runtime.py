@@ -86,6 +86,7 @@ def create_fastwam(
     video_scheduler=None,
     action_scheduler=None,
     loss=None,
+    gaussianwam=None,
     mot_checkpoint_mixed_attn: bool = True,
     redirect_common_files: bool = True,
     model_dtype: torch.dtype = torch.bfloat16,
@@ -133,6 +134,11 @@ def create_fastwam(
     if not isinstance(loss, dict):
         raise ValueError(f"`loss` must be dict-like, got {type(loss)}")
 
+    if isinstance(gaussianwam, DictConfig):
+        gaussianwam = OmegaConf.to_container(gaussianwam, resolve=True)
+    if gaussianwam is not None and not isinstance(gaussianwam, dict):
+        raise ValueError(f"`gaussianwam` must be dict-like, got {type(gaussianwam)}")
+
     return FastWAM.from_wan22_pretrained(
         device=device,
         torch_dtype=model_dtype,
@@ -155,6 +161,7 @@ def create_fastwam(
         action_num_train_timesteps=int(action_scheduler["num_train_timesteps"]),
         loss_lambda_video=float(loss.get("lambda_video", 1.0)),
         loss_lambda_action=float(loss.get("lambda_action", 1.0)),
+        gaussianwam=gaussianwam,
     )
 
 

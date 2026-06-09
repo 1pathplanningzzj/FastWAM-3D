@@ -38,6 +38,7 @@ class FastWAM(torch.nn.Module):
         action_num_train_timesteps: int = 1000,
         loss_lambda_video: float = 1.0,
         loss_lambda_action: float = 1.0,
+        gaussianwam: Optional[dict[str, Any]] = None,
     ):
         super().__init__()
         self.video_expert = video_expert
@@ -49,6 +50,8 @@ class FastWAM(torch.nn.Module):
         self.vae = vae
         self.text_encoder = text_encoder
         self.tokenizer = tokenizer
+        self.device = torch.device(device)
+        self.torch_dtype = torch_dtype
         if text_dim is None:
             if self.text_encoder is None:
                 raise ValueError("`text_dim` is required when `text_encoder` is not loaded.")
@@ -56,7 +59,7 @@ class FastWAM(torch.nn.Module):
         self.text_dim = int(text_dim)
         self.proprio_dim = None if proprio_dim is None else int(proprio_dim)
         if self.proprio_dim is not None:
-            self.proprio_encoder = nn.Linear(self.proprio_dim, self.text_dim).to(torch_dtype)
+            self.proprio_encoder = nn.Linear(self.proprio_dim, self.text_dim).to(self.torch_dtype)
         else:
             self.proprio_encoder = None
 
@@ -80,12 +83,249 @@ class FastWAM(torch.nn.Module):
         self.train_scheduler = self.train_video_scheduler
         self.infer_scheduler = self.infer_video_scheduler
 
-        self.device = torch.device(device)
-        self.torch_dtype = torch_dtype
         self.loss_lambda_video = float(loss_lambda_video)
         self.loss_lambda_action = float(loss_lambda_action)
+        self._init_gaussianwam(gaussianwam)
 
         self.to(self.device)
+
+    def _init_gaussianwam(self, gaussianwam: Optional[dict[str, Any]]):
+        cfg = dict(gaussianwam or {})
+        self.gaussianwam_cfg = cfg
+        self.gaussianwam_enabled = bool(cfg.get("enabled", False))
+        self.gaussianwam_target_tokens = str(cfg.get("target_tokens", "video_out_last_frame"))
+        self.gaussianwam_lambda_dense = float(cfg.get("lambda_dense", cfg.get("lambda_now", 0.0)))
+        self.gaussianwam_lambda_depth = float(cfg.get("lambda_depth", 0.0))
+        self.gaussianwam_lambda_alpha = float(cfg.get("lambda_alpha", 0.0))
+        self.gaussianwam_teacher_targets = set(cfg.get("teacher_targets", ["dense_3d", "depth", "alpha", "valid_mask"]))
+        freeze_cfg = dict(cfg.get("freeze", {}) or {})
+        self.gaussianwam_train_student_proj = bool(freeze_cfg.get("train_projection_heads", True))
+        self.gaussianwam_train_depth_head = bool(freeze_cfg.get("train_depth_head", True))
+        self.gaussianwam_train_alpha_head = bool(freeze_cfg.get("train_alpha_head", True))
+        self.gaussianwam_use_dense = "dense_3d" in self.gaussianwam_teacher_targets and self.gaussianwam_lambda_dense != 0.0
+        self.gaussianwam_use_depth = "depth" in self.gaussianwam_teacher_targets and self.gaussianwam_lambda_depth != 0.0
+        self.gaussianwam_use_alpha = "alpha" in self.gaussianwam_teacher_targets and self.gaussianwam_lambda_alpha != 0.0
+        self.gaussianwam_student_proj = None
+        self.gaussianwam_depth_head = None
+        self.gaussianwam_alpha_head = None
+        if not self.gaussianwam_enabled:
+            return
+
+        hidden_dim = int(getattr(self.video_expert, "hidden_dim", 0))
+        if hidden_dim <= 0:
+            raise ValueError("GaussianWAM requires `video_expert.hidden_dim` to build student heads.")
+        teacher_feature_dim = int(cfg.get("teacher_feature_dim", 0))
+        if self.gaussianwam_use_dense and teacher_feature_dim <= 0:
+            raise ValueError("GaussianWAM dense loss requires a positive `teacher_feature_dim`.")
+
+        if self.gaussianwam_use_dense:
+            self.gaussianwam_student_proj = nn.Sequential(
+                nn.LayerNorm(hidden_dim, elementwise_affine=False),
+                nn.Linear(hidden_dim, teacher_feature_dim),
+            ).to(self.torch_dtype)
+        if self.gaussianwam_use_depth:
+            self.gaussianwam_depth_head = nn.Sequential(
+                nn.LayerNorm(hidden_dim, elementwise_affine=False),
+                nn.Linear(hidden_dim, 1),
+            ).to(self.torch_dtype)
+        if self.gaussianwam_use_alpha:
+            self.gaussianwam_alpha_head = nn.Sequential(
+                nn.LayerNorm(hidden_dim, elementwise_affine=False),
+                nn.Linear(hidden_dim, 1),
+            ).to(self.torch_dtype)
+
+    def gaussianwam_head_modules(self) -> list[nn.Module]:
+        modules = []
+        for module in (
+            self.gaussianwam_student_proj,
+            self.gaussianwam_depth_head,
+            self.gaussianwam_alpha_head,
+        ):
+            if module is not None:
+                modules.append(module)
+        return modules
+
+    def has_gaussianwam_heads(self) -> bool:
+        return bool(self.gaussianwam_head_modules())
+
+    def _gaussianwam_teacher_from_sample(self, sample) -> Optional[dict[str, torch.Tensor]]:
+        if not self.gaussianwam_enabled or "gaussianwam_has_teacher" not in sample:
+            return None
+        if "T_valid_mask_mosaic" not in sample:
+            return None
+        required = []
+        if self.gaussianwam_use_dense:
+            required.append("T_gaussian_feature_mosaic")
+        if self.gaussianwam_use_depth:
+            required.append("T_depth_mosaic")
+        if self.gaussianwam_use_alpha:
+            required.append("T_alpha_mosaic")
+        if any(key not in sample for key in required):
+            return None
+        teacher = {
+            "has_teacher": sample["gaussianwam_has_teacher"].to(device=self.device, dtype=torch.bool, non_blocking=True),
+            "mask": sample["T_valid_mask_mosaic"].to(device=self.device, dtype=torch.bool, non_blocking=True),
+        }
+        if self.gaussianwam_use_dense:
+            teacher["feature"] = sample["T_gaussian_feature_mosaic"].to(device=self.device, dtype=torch.float32, non_blocking=True)
+        if self.gaussianwam_use_depth:
+            teacher["depth"] = sample["T_depth_mosaic"].to(device=self.device, dtype=torch.float32, non_blocking=True)
+        if self.gaussianwam_use_alpha:
+            teacher["alpha"] = sample["T_alpha_mosaic"].to(device=self.device, dtype=torch.float32, non_blocking=True)
+        return teacher
+
+    @staticmethod
+    def _masked_pool_teacher_grid(
+        feature: Optional[torch.Tensor],
+        depth: Optional[torch.Tensor],
+        alpha: Optional[torch.Tensor],
+        mask: torch.Tensor,
+        target_h: int,
+        target_w: int,
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor]:
+        if mask.ndim != 3:
+            raise ValueError(f"Gaussian teacher mask must be [B,H,W], got {tuple(mask.shape)}")
+        batch, source_h, source_w = mask.shape
+        if feature is not None and (feature.ndim != 4 or feature.shape[:3] != (batch, source_h, source_w)):
+            raise ValueError("Gaussian teacher feature shape must be [B,H,W,D] on the mask grid.")
+        if depth is not None and depth.shape != (batch, source_h, source_w):
+            raise ValueError("Gaussian teacher depth shape must match mask grid.")
+        if alpha is not None and alpha.shape != (batch, source_h, source_w):
+            raise ValueError("Gaussian teacher alpha shape must match mask grid.")
+        if source_h % target_h != 0 or source_w % target_w != 0:
+            raise ValueError(
+                "Gaussian teacher grid cannot be pooled to token grid: "
+                f"source=({source_h},{source_w}) target=({target_h},{target_w})"
+            )
+
+        if source_h == target_h and source_w == target_w:
+            pooled_feature = None if feature is None else feature.reshape(batch, target_h * target_w, feature.shape[-1])
+            pooled_depth = None if depth is None else depth.reshape(batch, target_h * target_w)
+            pooled_alpha = None if alpha is None else alpha.reshape(batch, target_h * target_w)
+            return pooled_feature, pooled_depth, pooled_alpha, mask.reshape(batch, target_h * target_w)
+
+        kernel = (source_h // target_h, source_w // target_w)
+        mask_f = mask.float().unsqueeze(1)
+        count = F.avg_pool2d(mask_f, kernel_size=kernel, stride=kernel) * float(kernel[0] * kernel[1])
+        denom = count.clamp(min=1.0)
+
+        pooled_feature = None
+        if feature is not None:
+            feature_chw = feature.permute(0, 3, 1, 2).contiguous()
+            pooled_feature = F.avg_pool2d(feature_chw * mask_f, kernel_size=kernel, stride=kernel)
+            pooled_feature = pooled_feature * float(kernel[0] * kernel[1]) / denom
+            pooled_feature = pooled_feature.permute(0, 2, 3, 1).contiguous()
+            pooled_feature = pooled_feature.reshape(batch, target_h * target_w, feature.shape[-1])
+
+        pooled_depth = None
+        if depth is not None:
+            pooled_depth = F.avg_pool2d(depth.unsqueeze(1) * mask_f, kernel_size=kernel, stride=kernel)
+            pooled_depth = (pooled_depth * float(kernel[0] * kernel[1]) / denom).squeeze(1)
+            pooled_depth = pooled_depth.reshape(batch, target_h * target_w)
+
+        pooled_alpha = None
+        if alpha is not None:
+            pooled_alpha = F.avg_pool2d(alpha.unsqueeze(1) * mask_f, kernel_size=kernel, stride=kernel)
+            pooled_alpha = (pooled_alpha * float(kernel[0] * kernel[1]) / denom).squeeze(1)
+            pooled_alpha = pooled_alpha.reshape(batch, target_h * target_w)
+
+        pooled_mask = count.squeeze(1) > 0
+        return pooled_feature, pooled_depth, pooled_alpha, pooled_mask.reshape(batch, target_h * target_w)
+
+    def _select_gaussianwam_video_tokens(self, video_tokens: torch.Tensor, video_meta: dict[str, Any]) -> torch.Tensor:
+        if "grid_size" not in video_meta or "tokens_per_frame" not in video_meta:
+            raise ValueError("GaussianWAM requires video_pre meta with `grid_size` and `tokens_per_frame`.")
+        num_frames, grid_h, grid_w = [int(v) for v in video_meta["grid_size"]]
+        tokens_per_frame = int(video_meta["tokens_per_frame"])
+        if tokens_per_frame != grid_h * grid_w:
+            raise ValueError(
+                f"tokens_per_frame mismatch: got {tokens_per_frame}, expected {grid_h * grid_w}."
+            )
+        target = self.gaussianwam_target_tokens
+        if target.endswith("first_frame"):
+            frame_idx = 0
+        elif target.endswith("last_frame"):
+            frame_idx = num_frames - 1
+        else:
+            raise ValueError(f"Unsupported GaussianWAM target_tokens: {target}")
+        start = frame_idx * tokens_per_frame
+        end = start + tokens_per_frame
+        if end > video_tokens.shape[1]:
+            raise ValueError(
+                f"GaussianWAM token slice out of range: target={target}, slice=({start},{end}), seq={video_tokens.shape[1]}"
+            )
+        return video_tokens[:, start:end, :]
+
+    @staticmethod
+    def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        mask = mask.to(device=values.device, dtype=torch.bool)
+        weight = mask.to(dtype=values.dtype)
+        safe_values = torch.where(mask, values, torch.zeros_like(values))
+        return safe_values.sum() / weight.sum().clamp(min=1.0)
+
+    def _compute_gaussianwam_loss(
+        self,
+        video_tokens: torch.Tensor,
+        video_meta: dict[str, Any],
+        teacher: Optional[dict[str, torch.Tensor]],
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        if not self.gaussianwam_enabled or teacher is None:
+            zero = video_tokens.float().sum() * 0.0
+            return zero, {}
+        if self.gaussianwam_use_dense and self.gaussianwam_student_proj is None:
+            raise RuntimeError("GaussianWAM dense loss is enabled but student projection head is missing.")
+        if self.gaussianwam_use_depth and self.gaussianwam_depth_head is None:
+            raise RuntimeError("GaussianWAM depth loss is enabled but depth head is missing.")
+        if self.gaussianwam_use_alpha and self.gaussianwam_alpha_head is None:
+            raise RuntimeError("GaussianWAM alpha loss is enabled but alpha head is missing.")
+
+        student_tokens = self._select_gaussianwam_video_tokens(video_tokens, video_meta)
+        _, grid_h, grid_w = [int(v) for v in video_meta["grid_size"]]
+        t_feature, t_depth, t_alpha, t_mask = self._masked_pool_teacher_grid(
+            feature=teacher.get("feature"),
+            depth=teacher.get("depth"),
+            alpha=teacher.get("alpha"),
+            mask=teacher["mask"],
+            target_h=grid_h,
+            target_w=grid_w,
+        )
+        has_teacher = teacher["has_teacher"].view(-1, 1)
+        valid_base = t_mask & has_teacher
+        total = student_tokens.float().sum() * 0.0
+        metrics = {
+            "gaussian_valid_ratio": float(valid_base.float().mean().detach().item()),
+            "gaussian_has_teacher_ratio": float(has_teacher.float().mean().detach().item()),
+        }
+
+        if self.gaussianwam_use_dense:
+            dense_valid = valid_base & torch.isfinite(t_feature).all(dim=-1)
+            student_dense = self.gaussianwam_student_proj(student_tokens).float()
+            if student_dense.shape[-1] != t_feature.shape[-1]:
+                raise ValueError(
+                    "GaussianWAM feature dim mismatch: "
+                    f"student={student_dense.shape[-1]}, teacher={t_feature.shape[-1]}"
+                )
+            dense_cos = (F.normalize(student_dense, dim=-1) * F.normalize(t_feature.detach().float(), dim=-1)).sum(dim=-1)
+            loss_dense = self._masked_mean(1.0 - dense_cos, dense_valid)
+            total = total + self.gaussianwam_lambda_dense * loss_dense
+            metrics["loss_gaussian_dense"] = float(loss_dense.detach().item())
+            metrics["gaussian_dense_cos"] = float(self._masked_mean(dense_cos.detach(), dense_valid).item())
+
+        if self.gaussianwam_use_depth:
+            depth_valid = valid_base & torch.isfinite(t_depth)
+            depth_pred = self.gaussianwam_depth_head(student_tokens).squeeze(-1).float()
+            loss_depth = self._masked_mean((depth_pred - t_depth.detach()).abs(), depth_valid)
+            total = total + self.gaussianwam_lambda_depth * loss_depth
+            metrics["loss_gaussian_depth"] = float(loss_depth.detach().item())
+
+        if self.gaussianwam_use_alpha:
+            alpha_valid = valid_base & torch.isfinite(t_alpha)
+            alpha_pred = torch.sigmoid(self.gaussianwam_alpha_head(student_tokens).squeeze(-1)).float()
+            loss_alpha = self._masked_mean((alpha_pred - t_alpha.detach()).abs(), alpha_valid)
+            total = total + self.gaussianwam_lambda_alpha * loss_alpha
+            metrics["loss_gaussian_alpha"] = float(loss_alpha.detach().item())
+
+        return total, metrics
 
     @classmethod
     def from_wan22_pretrained(
@@ -111,6 +351,7 @@ class FastWAM(torch.nn.Module):
         action_num_train_timesteps: int = 1000,
         loss_lambda_video: float = 1.0,
         loss_lambda_action: float = 1.0,
+        gaussianwam: Optional[dict[str, Any]] = None,
     ):
         if video_dit_config is None:
             raise ValueError("`video_dit_config` is required for FastWAM.from_wan22_pretrained().")
@@ -168,6 +409,7 @@ class FastWAM(torch.nn.Module):
             action_num_train_timesteps=action_num_train_timesteps,
             loss_lambda_video=loss_lambda_video,
             loss_lambda_action=loss_lambda_action,
+            gaussianwam=gaussianwam,
         )
         model.model_paths = {
             "video_dit": components.dit_path,
@@ -447,6 +689,7 @@ class FastWAM(torch.nn.Module):
 
     def training_loss(self, sample, tiled: bool = False):
         inputs = self.build_inputs(sample, tiled=tiled)
+        gaussian_teacher = self._gaussianwam_teacher_from_sample(sample)
         input_latents = inputs["input_latents"]
         batch_size = input_latents.shape[0]
         context = inputs["context"]
@@ -527,6 +770,12 @@ class FastWAM(torch.nn.Module):
             },
         )
 
+        gaussianwam_loss, gaussianwam_metrics = self._compute_gaussianwam_loss(
+            video_tokens=tokens_out["video"],
+            video_meta=video_pre["meta"],
+            teacher=gaussian_teacher,
+        )
+
         pred_video = self.video_expert.post_dit(tokens_out["video"], video_pre)
 
         pred_action = self.action_expert.post_dit(tokens_out["action"], action_pre)
@@ -560,11 +809,12 @@ class FastWAM(torch.nn.Module):
         )
         loss_action = (action_loss_per_sample * action_weight).mean()
 
-        loss_total = self.loss_lambda_video * loss_video + self.loss_lambda_action * loss_action
+        loss_total = self.loss_lambda_video * loss_video + self.loss_lambda_action * loss_action + gaussianwam_loss
         loss_dict = {
             "loss_video": self.loss_lambda_video * float(loss_video.detach().item()),
             "loss_action": self.loss_lambda_action * float(loss_action.detach().item()),
         }
+        loss_dict.update(gaussianwam_metrics)
         return loss_total, loss_dict
 
     @torch.no_grad()
@@ -1093,6 +1343,15 @@ class FastWAM(torch.nn.Module):
         }
         if self.proprio_encoder is not None:
             payload["proprio_encoder"] = self.proprio_encoder.state_dict()
+        if self.has_gaussianwam_heads():
+            gaussian_payload = {"config": self.gaussianwam_cfg}
+            if self.gaussianwam_student_proj is not None:
+                gaussian_payload["student_proj"] = self.gaussianwam_student_proj.state_dict()
+            if self.gaussianwam_depth_head is not None:
+                gaussian_payload["depth_head"] = self.gaussianwam_depth_head.state_dict()
+            if self.gaussianwam_alpha_head is not None:
+                gaussian_payload["alpha_head"] = self.gaussianwam_alpha_head.state_dict()
+            payload["gaussianwam"] = gaussian_payload
         if optimizer is not None:
             payload["optimizer"] = optimizer.state_dict()
         torch.save(payload, path)
@@ -1113,6 +1372,20 @@ class FastWAM(torch.nn.Module):
                 logger.warning("Checkpoint has no `proprio_encoder` weights; keeping current `proprio_encoder` params.")
         elif "proprio_encoder" in payload:
             logger.warning("Checkpoint contains `proprio_encoder` weights but current model has `proprio_dim=None`; ignoring.")
+
+        if self.has_gaussianwam_heads():
+            if "gaussianwam" in payload:
+                gaussian_payload = payload["gaussianwam"]
+                if self.gaussianwam_student_proj is not None and "student_proj" in gaussian_payload:
+                    self.gaussianwam_student_proj.load_state_dict(gaussian_payload["student_proj"], strict=True)
+                if self.gaussianwam_depth_head is not None and "depth_head" in gaussian_payload:
+                    self.gaussianwam_depth_head.load_state_dict(gaussian_payload["depth_head"], strict=True)
+                if self.gaussianwam_alpha_head is not None and "alpha_head" in gaussian_payload:
+                    self.gaussianwam_alpha_head.load_state_dict(gaussian_payload["alpha_head"], strict=True)
+            else:
+                logger.warning("Checkpoint has no GaussianWAM head weights; keeping current GaussianWAM head params.")
+        elif "gaussianwam" in payload:
+            logger.warning("Checkpoint contains GaussianWAM heads but current model has GaussianWAM disabled; ignoring.")
 
         if optimizer is not None and "optimizer" in payload:
             optimizer.load_state_dict(payload["optimizer"])
