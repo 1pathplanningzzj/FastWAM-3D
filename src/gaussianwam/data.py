@@ -36,6 +36,7 @@ def build_raw_dataset(source_cfg) -> BaseLerobotDataset:
         val_set_proportion=float(source_cfg.val_set_proportion),
         is_training_set=bool(source_cfg.is_training_set),
         global_sample_stride=int(source_cfg.global_sample_stride),
+        episode_subset_manifest=source_cfg.get("episode_subset_manifest", None),
     )
 
 

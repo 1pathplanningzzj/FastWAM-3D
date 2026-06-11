@@ -1,0 +1,55 @@
+# @package _global_
+
+defaults:
+  - override /data: robotwin_gaussianwam
+  - override /model: gaussianwam
+  - _self_
+
+# dataloading
+batch_size: 8
+num_workers: 8
+
+model:
+  mot_checkpoint_mixed_attn: true
+
+# scheduler
+lr_scheduler_type: "cosine"
+learning_rate: 1e-4
+num_epochs: 5
+max_steps: null
+log_every: 10
+save_every: 2500
+eval_every: 500
+
+# training
+gradient_accumulation_steps: 2
+weight_decay: 1e-2
+resume: /data/zijianzhang/FastWAM/checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt
+
+data:
+  train:
+    episode_subset_manifest: ./data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug_clean.jsonl
+    gaussian_teacher:
+      manifest_path: ./data/robotwin2.0/gaussian_teacher_cache/v4/gaussian_vggt256text_3d_focus3_firstframe_all_v3_clean/train/manifest.jsonl
+      expected_target_offset: 0
+  val:
+    episode_subset_manifest: ./data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug_clean.jsonl
+
+gaussianwam:
+  enabled: true
+  stage: current_3d_distill
+  base_variant: uncond
+  target_tokens: video_out_first_frame
+  teacher_targets: [dense_3d, depth, alpha, valid_mask]
+  teacher_feature_dim: 64
+  lambda_dense: 0.01
+  lambda_depth: 0.01
+  lambda_alpha: 0.005
+  freeze:
+    action_expert: false
+    mot: false
+    video_expert_train_last_n_layers: 0
+    train_projection_heads: true
+    train_depth_head: true
+    train_alpha_head: true
+    train_proprio_encoder: true

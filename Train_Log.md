@@ -69,3 +69,30 @@ Status snapshot at record time:
 - In this path, GaussianWAM auxiliary heads may be ignored at eval load time, but the finetuned policy backbone in `mot.state_dict()` is still used
 - For RoboTwin here, `EVALUATION.eval_num_episodes` controls the true episode count and overrides the `episode_num: 50` inside `third_party/RoboTwin/task_config/*.yml`
 - Therefore the current default manager behavior is `100` episodes for `demo_clean` and `100` episodes for `demo_randomized` unless explicitly overridden
+
+### First-frame teacher refresh
+
+- Goal: test `focus3 (switch / microwave / mug)` with `first-frame` Gaussian teacher alignment
+- Training-side alignment config prepared:
+  - `configs/task/robotwin_gaussianwam_stage2_focus3_fullft_firstframe_current_3cam_384_1e-4.yaml`
+  - `gaussianwam.target_tokens=video_out_first_frame`
+  - `expected_target_offset=0`
+- Previous frame-level subset attempt was discarded because its indexing did not align with the filtered training dataset
+- A second issue was then found in the old `focus3` subset:
+  - keyword-based `switch` matching also pulled in `switch-hand / transfer` tasks
+  - this polluted the subset with unrelated prompts such as `microphone`
+- Clean episode subset rebuilt from true prompt semantics:
+  - `data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug_clean.jsonl`
+  - episode counts: `switch=550`, `microwave=550`, `mug=550`
+- Training and teacher configs now both point to the clean subset
+- Current teacher cache namespace:
+  - `gaussian_vggt256text_3d_focus3_firstframe_all_v3_clean`
+- Current 8-GPU precompute tmux session:
+  - `gaussian_focus3_firstframe_cache_v3_clean`
+- Current log dir:
+
+`data/robotwin2.0/gaussian_teacher_cache/logs/gaussian_vggt256text_3d_focus3_firstframe_all_v3_clean_20260609_103620`
+
+- Current clean-subset train split size used for teacher precompute:
+  - `episodes_train=1633`
+  - `frames_train=535116`
