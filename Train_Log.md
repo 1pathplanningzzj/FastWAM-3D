@@ -96,3 +96,48 @@ Status snapshot at record time:
 - Current clean-subset train split size used for teacher precompute:
   - `episodes_train=1633`
   - `frames_train=535116`
+
+## 2026-06-11
+
+### LIBERO first-frame teacher cache
+
+- Goal: generate LIBERO Gaussian teacher cache aligned with Stage 2 `first frame` distillation
+- Teacher precompute config:
+  - `configs/gaussianwam/stage1_libero.yaml`
+  - `source.target_frame_policy=first_video_frame`
+- Training-side alignment config:
+  - `configs/data/libero_gaussianwam.yaml`
+  - `expected_target_offset=0`
+  - `expected_camera_keys=[image, wrist_image]`
+  - `expected_mosaic.layout=horizontal`
+  - `expected_mosaic.grid_size=[14, 28]`
+- Cache manifest target:
+  - `data/libero_teacher_cache/v1/gaussian_vggt256text_3d_libero_firstframe_all_v1/train/manifest.jsonl`
+- 8-GPU launcher script:
+  - `scripts/gaussianwam/run_libero_firstframe_cache_8gpu.sh`
+
+### Restart command
+
+Use the `fastwam` env and restart LIBERO cache generation later with:
+
+```bash
+cd /data/zijianzhang/FastWAM
+export LIBERO_DATA_ROOT=/data/zijianzhang/libero_mujoco3.3.2
+export HF_HOME=/data/zijianzhang/FastWAM/.hf_cache
+export HF_DATASETS_CACHE=/data/zijianzhang/FastWAM/.hf_cache/datasets
+export HUGGINGFACE_HUB_CACHE=/data/zijianzhang/FastWAM/.hf_cache/hub
+tmux -S /data/zijianzhang/FastWAM/.tmux-fastwam.sock new-session -d -s libero_cache \
+  'cd /data/zijianzhang/FastWAM && \
+   export LIBERO_DATA_ROOT=/data/zijianzhang/libero_mujoco3.3.2 && \
+   export HF_HOME=/data/zijianzhang/FastWAM/.hf_cache && \
+   export HF_DATASETS_CACHE=/data/zijianzhang/FastWAM/.hf_cache/datasets && \
+   export HUGGINGFACE_HUB_CACHE=/data/zijianzhang/FastWAM/.hf_cache/hub && \
+   bash scripts/gaussianwam/run_libero_firstframe_cache_8gpu.sh'
+```
+
+### Monitoring
+
+```bash
+tmux -S /data/zijianzhang/FastWAM/.tmux-fastwam.sock attach -t libero_cache
+tail -f data/libero_teacher_cache/logs/<run_dir>/manager.log
+```

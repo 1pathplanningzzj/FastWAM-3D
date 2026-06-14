@@ -94,6 +94,21 @@ def _resize_mask_hw(x: torch.Tensor, size: tuple[int, int]) -> torch.Tensor:
     return torch.nn.functional.interpolate(x[:, None].float(), size=size, mode="nearest").squeeze(1).bool()
 
 
+def _split_spans(total: int, count: int) -> list[tuple[int, int]]:
+    if count <= 0:
+        raise ValueError(f"Expected positive tile count, got {count}")
+    base = total // count
+    remainder = total % count
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for i in range(count):
+        extent = base + (1 if i < remainder else 0)
+        end = start + extent
+        spans.append((start, end))
+        start = end
+    return spans
+
+
 def _robotwin_tiles(camera_keys: list[str], mosaic_grid_size: tuple[int, int]) -> dict[str, tuple[slice, slice]]:
     h, w = mosaic_grid_size
     top_h = int(round(h * 2 / 3))
@@ -106,22 +121,47 @@ def _robotwin_tiles(camera_keys: list[str], mosaic_grid_size: tuple[int, int]) -
     }
 
 
-def _compose_robotwin_mosaic(
+def _horizontal_tiles(camera_keys: list[str], mosaic_grid_size: tuple[int, int]) -> dict[str, tuple[slice, slice]]:
+    h, w = mosaic_grid_size
+    tiles = {}
+    for key, (start, end) in zip(camera_keys, _split_spans(w, len(camera_keys))):
+        tiles[key] = (slice(0, h), slice(start, end))
+    return tiles
+
+
+def _vertical_tiles(camera_keys: list[str], mosaic_grid_size: tuple[int, int]) -> dict[str, tuple[slice, slice]]:
+    h, w = mosaic_grid_size
+    tiles = {}
+    for key, (start, end) in zip(camera_keys, _split_spans(h, len(camera_keys))):
+        tiles[key] = (slice(start, end), slice(0, w))
+    return tiles
+
+
+def _compose_mosaic(
     feature: torch.Tensor,
     depth: torch.Tensor,
     alpha: torch.Tensor,
     mask: torch.Tensor,
     camera_keys: list[str],
     mosaic_grid_size: tuple[int, int],
+    layout: str,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
-    if len(camera_keys) != 3:
-        raise ValueError(f"RobotWin mosaic composition expects 3 cameras, got {camera_keys}")
     h, w = mosaic_grid_size
     feat_m = torch.zeros(h, w, feature.shape[-1], device=feature.device, dtype=feature.dtype)
     dep_m = torch.zeros(h, w, device=depth.device, dtype=depth.dtype)
     alpha_m = torch.zeros(h, w, device=alpha.device, dtype=alpha.dtype)
     mask_m = torch.zeros(h, w, device=mask.device, dtype=torch.bool)
-    tiles = _robotwin_tiles(camera_keys, mosaic_grid_size)
+    layout = str(layout)
+    if layout == "robotwin":
+        if len(camera_keys) != 3:
+            raise ValueError(f"RobotWin mosaic composition expects 3 cameras, got {camera_keys}")
+        tiles = _robotwin_tiles(camera_keys, mosaic_grid_size)
+    elif layout == "horizontal":
+        tiles = _horizontal_tiles(camera_keys, mosaic_grid_size)
+    elif layout == "vertical":
+        tiles = _vertical_tiles(camera_keys, mosaic_grid_size)
+    else:
+        raise ValueError(f"Unsupported mosaic layout: {layout}")
     tile_meta = {}
     for view, key in enumerate(camera_keys):
         row_slice, col_slice = tiles[key]
@@ -141,7 +181,7 @@ def _compose_robotwin_mosaic(
         "T_depth_mosaic": dep_m,
         "T_alpha_mosaic": alpha_m,
         "T_valid_mask_mosaic": mask_m,
-    }, {"layout": "robotwin", "grid_size": [h, w], "tiles": tile_meta}
+    }, {"layout": layout, "grid_size": [h, w], "tiles": tile_meta}
 
 
 def precompute(cfg, *, limit: int | None = None, dry_run: bool = False, overwrite: bool | None = None) -> dict[str, int]:
@@ -312,13 +352,15 @@ def precompute(cfg, *, limit: int | None = None, dry_run: bool = False, overwrit
             mosaic_cfg = cfg.get("mosaic", {}) or {}
             if bool(mosaic_cfg.get("enabled", True)):
                 mosaic_grid = tuple(int(x) for x in mosaic_cfg.get("grid_size", cfg.gaussian.target_grid_size))
-                mosaic_targets, mosaic_meta = _compose_robotwin_mosaic(
+                mosaic_layout = str(mosaic_cfg.get("layout", "robotwin"))
+                mosaic_targets, mosaic_meta = _compose_mosaic(
                     render["feature_map"].detach(),
                     render["dep"].detach(),
                     render["alpha"].detach(),
                     valid_mask.detach(),
                     camera_keys,
                     mosaic_grid,
+                    mosaic_layout,
                 )
                 targets.update({key: value.to("cpu", dtype=torch.bfloat16 if value.ndim == 3 else value.dtype) for key, value in mosaic_targets.items()})
             else:

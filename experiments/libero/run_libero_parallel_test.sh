@@ -19,6 +19,8 @@ run_libero_eval() {
     # Basic configuration
     ROOT_DIR=${ROOT_DIR:-"$(pwd)"}
     export ROOT_DIR
+    PYTHON_BIN=${PYTHON_BIN:-/data/miniconda3/envs/fastwam-libero/bin/python}
+    export PYTHON_BIN
     # Generate a unique run_id
     RUN_ID=${RUN_ID:-"eval_$(date +%Y%m%d_%H%M%S)"}
     export RUN_ID
@@ -256,6 +258,7 @@ run_libero_eval() {
     echo "CKPT: $CKPT"
     echo "CONFIG: $CONFIG"
     echo "ROOT_DIR: $ROOT_DIR"
+    echo "PYTHON_BIN: $PYTHON_BIN"
     echo "NUM_GPUS: $NUM_GPUS"
     echo "MAX_TASKS_PER_GPU: $MAX_TASKS_PER_GPU"
     
@@ -337,7 +340,7 @@ run_libero_eval() {
         tmux send-keys -t $SESSION_NAME:$pane_info "clear" C-m 2>/dev/null
         tmux send-keys -t $SESSION_NAME:$pane_info "source ~/.bashrc && cd $ROOT_DIR && export EXP_NAME=$EXP_NAME && \
             STATUS_FILE='$status_file' LOG_FILE='$log_file' RESULT_FILE='$result_file' && \
-            CUDA_VISIBLE_DEVICES=$gpu_id python experiments/libero/eval_libero_single.py \
+            CUDA_VISIBLE_DEVICES=$gpu_id PYTHONPATH='$PYTHONPATH' LIBERO_DATA_ROOT='$LIBERO_DATA_ROOT' MUJOCO_GL='${MUJOCO_GL:-}' PYOPENGL_PLATFORM='${PYOPENGL_PLATFORM:-}' MPLCONFIGDIR='${MPLCONFIGDIR:-}' '$PYTHON_BIN' experiments/libero/eval_libero_single.py \
             task=$CONFIG ckpt=$CKPT \
             EVALUATION.task_suite_name=$suite EVALUATION.task_id=$task_id gpu_id=$gpu_id \
             EVALUATION.num_trials=$NUM_TRIALS EVALUATION.output_dir=$OUTPUT_DIR $EXTRA_ARGS > \"\$LOG_FILE\" 2>&1; \

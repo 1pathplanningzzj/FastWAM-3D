@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from omegaconf import OmegaConf
 
 from fastwam.datasets.lerobot.base_lerobot_dataset import BaseLerobotDataset
 
@@ -18,15 +17,29 @@ class RawMultiViewSample:
     metadata: dict[str, Any]
 
 
+def _shape_list(source_cfg, key: str, default: list[int] | None = None) -> list[int]:
+    value = source_cfg.get(key, default)
+    if value is None:
+        raise ValueError(f"GaussianWAM source config is missing `{key}`.")
+    out = [int(x) for x in value]
+    if not out:
+        raise ValueError(f"GaussianWAM source config `{key}` must not be empty.")
+    return out
+
+
 def build_raw_dataset(source_cfg) -> BaseLerobotDataset:
     camera_keys = list(source_cfg.camera_keys)
+    image_raw_shape = _shape_list(source_cfg, "image_raw_shape", [3, 480, 640])
+    image_shape = _shape_list(source_cfg, "image_shape", image_raw_shape)
+    action_dim = int(source_cfg.get("action_dim", 14))
+    state_dim = int(source_cfg.get("state_dim", action_dim))
     shape_meta = {
         "images": [
-            {"key": key, "raw_shape": [3, 480, 640], "shape": [3, 240, 320]}
+            {"key": key, "raw_shape": list(image_raw_shape), "shape": list(image_shape)}
             for key in camera_keys
         ],
-        "action": [{"key": "default", "raw_shape": 14, "shape": 14}],
-        "state": [{"key": "default", "raw_shape": 14, "shape": 14}],
+        "action": [{"key": "default", "raw_shape": action_dim, "shape": action_dim}],
+        "state": [{"key": "default", "raw_shape": state_dim, "shape": state_dim}],
     }
     return BaseLerobotDataset(
         dataset_dirs=list(source_cfg.dataset_dirs),

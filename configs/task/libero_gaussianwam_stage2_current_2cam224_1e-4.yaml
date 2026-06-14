@@ -1,0 +1,46 @@
+# @package _global_
+
+defaults:
+  - override /data: libero_gaussianwam
+  - override /model: gaussianwam
+  - _self_
+
+# dataloading
+batch_size: 16
+num_workers: 8
+
+model:
+  mot_checkpoint_mixed_attn: false
+
+# scheduler
+lr_scheduler_type: "cosine"
+learning_rate: 1e-4
+num_epochs: 10
+max_steps: null
+log_every: 10
+save_every: 2000
+eval_every: 200
+
+# training
+gradient_accumulation_steps: 1
+weight_decay: 1e-2
+resume: ./checkpoints/fastwam_release/libero_uncond_2cam224.pt
+
+gaussianwam:
+  enabled: true
+  stage: current_3d_distill
+  base_variant: uncond
+  target_tokens: video_out_first_frame
+  teacher_targets: [dense_3d, depth, alpha, valid_mask]
+  teacher_feature_dim: 64
+  lambda_dense: 0.01
+  lambda_depth: 0.01
+  lambda_alpha: 0.005
+  freeze:
+    action_expert: true
+    mot: true
+    video_expert_train_last_n_layers: 2
+    train_projection_heads: true
+    train_depth_head: true
+    train_alpha_head: true
+    train_proprio_encoder: true

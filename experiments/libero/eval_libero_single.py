@@ -60,6 +60,40 @@ class NumpyEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
+def _patch_libero_init_state_loader() -> None:
+    """Keep LIBERO init-state loading compatible with PyTorch >= 2.6.
+
+    LIBERO stores task init states as general pickled numpy arrays rather than
+    tensor-only checkpoints. PyTorch 2.6 changed torch.load's default to
+    weights_only=True, which breaks these files unless we opt out explicitly.
+    """
+    benchmark_cls = getattr(benchmark, "Benchmark", None)
+    get_libero_path = getattr(benchmark, "get_libero_path", None)
+    if benchmark_cls is None or get_libero_path is None:
+        logging.warning(
+            "Failed to patch LIBERO init-state loader; benchmark module layout is unexpected."
+        )
+        return
+
+    current_loader = getattr(benchmark_cls, "get_task_init_states", None)
+    if current_loader is None or getattr(current_loader, "_fastwam_patched", False):
+        return
+
+    def _patched_get_task_init_states(self, i):
+        init_states_path = os.path.join(
+            get_libero_path("init_states"),
+            self.tasks[i].problem_folder,
+            self.tasks[i].init_states_file,
+        )
+        return torch.load(init_states_path, weights_only=False)
+
+    _patched_get_task_init_states._fastwam_patched = True
+    benchmark_cls.get_task_init_states = _patched_get_task_init_states
+    logging.info(
+        "Patched LIBERO Benchmark.get_task_init_states to use torch.load(weights_only=False)."
+    )
+
+
 def _normalize_mixed_precision(mixed_precision: str) -> str:
     key = str(mixed_precision).strip().lower()
     if key not in {"no", "fp16", "bf16"}:
@@ -706,6 +740,7 @@ def eval_single_process(cfg: DictConfig):
     processor: FastWAMProcessor = instantiate(cfg.data.train.processor).eval()
     processor.set_normalizer_from_stats(dataset_stats)
     logging.info("Using dataset stats: %s", dataset_stats_path)
+    _patch_libero_init_state_loader()
 
     action_horizon_cfg = cfg.EVALUATION.get("action_horizon", None)
     if action_horizon_cfg is None:
