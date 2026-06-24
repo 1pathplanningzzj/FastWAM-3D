@@ -3,9 +3,12 @@ set -euo pipefail
 
 cd /data/zijianzhang/FastWAM
 
+GAUSSIANWAM_ROOT="${GAUSSIANWAM_ROOT:-/data/zijianzhang/gaussianwam_data}"
+RUNS_ROOT="${RUNS_ROOT:-${GAUSSIANWAM_ROOT}/runs}"
+
 OUT_DIR="/data/zijianzhang/FastWAM/evaluate_results/robotwin/robotwin_gaussianwam_stage2_focus3_fullft_current_3cam_384_1e-4_2026-06-08_20-11-33_gpus3-4-5-7_tmux/20260611_3tasks_step40000_gpu6"
-CKPT="/data/zijianzhang/FastWAM/runs/robotwin_gaussianwam_stage2_focus3_fullft_current_3cam_384_1e-4/2026-06-08_20-11-33_gpus3-4-5-7_tmux/checkpoints/weights/step_040000.pt"
-STATS="/data/zijianzhang/FastWAM/runs/robotwin_gaussianwam_stage2_focus3_fullft_current_3cam_384_1e-4/2026-06-08_20-11-33_gpus3-4-5-7_tmux/dataset_stats.json"
+CKPT="${RUNS_ROOT}/robotwin_gaussianwam_stage2_focus3_fullft_current_3cam_384_1e-4/2026-06-08_20-11-33_gpus3-4-5-7_tmux/checkpoints/weights/step_040000.pt"
+STATS="${RUNS_ROOT}/robotwin_gaussianwam_stage2_focus3_fullft_current_3cam_384_1e-4/2026-06-08_20-11-33_gpus3-4-5-7_tmux/dataset_stats.json"
 PYTHON_BIN="/data/miniconda3/envs/fastwam/bin/python"
 LOG="$OUT_DIR/launch_step40000_gpu6.log"
 

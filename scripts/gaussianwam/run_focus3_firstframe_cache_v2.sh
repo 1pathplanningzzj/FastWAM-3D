@@ -3,9 +3,10 @@ set -euo pipefail
 
 cd /data/zijianzhang/FastWAM
 
+GAUSSIANWAM_ROOT="${GAUSSIANWAM_ROOT:-/data/zijianzhang/gaussianwam_data}"
 TOTAL=535116
 CHUNK=$(( (TOTAL + 7) / 8 ))
-LOG_DIR="/data/zijianzhang/FastWAM/data/robotwin2.0/gaussian_teacher_cache/logs/gaussian_vggt256text_3d_focus3_firstframe_all_v3_clean_$(date +%Y%m%d_%H%M%S)"
+LOG_DIR="${GAUSSIANWAM_ROOT}/data/robotwin2.0/gaussian_teacher_cache/logs/gaussian_vggt256text_3d_focus3_firstframe_all_v3_clean_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
 echo "TOTAL=$TOTAL CHUNK=$CHUNK LOG_DIR=$LOG_DIR" | tee "$LOG_DIR/manager.log"
 

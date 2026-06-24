@@ -39,6 +39,11 @@ EVALUATION:
   # Optional external inputs
   dataset_stats_path: null
   device: cuda
+  plus_root: null
+  plus_config_dir: null
+  plus_category: null
+  plus_task_classification_path: null
+  task_plan_file: null
 
 MULTIRUN:
   create_only: false

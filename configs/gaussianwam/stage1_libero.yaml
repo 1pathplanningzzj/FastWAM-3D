@@ -1,5 +1,6 @@
-data_root: ${oc.env:LIBERO_DATA_ROOT,./data/libero_mujoco3.3.2}
-output_dir: ./data/libero_teacher_cache
+gaussianwam_root: ${oc.env:GAUSSIANWAM_ROOT,/data/zijianzhang/gaussianwam_data}
+data_root: ${oc.env:LIBERO_DATA_ROOT,${gaussianwam_root}/data/libero_mujoco3.3.2}
+output_dir: ${gaussianwam_root}/data/libero_teacher_cache
 split: train
 seed: 42
 device: cuda
@@ -50,7 +51,7 @@ clip:
     checkpoint_path: ""
 
 text_cache:
-  dir: ./data/text_embeds_cache/libero
+  dir: ${gaussianwam_root}/data/text_embeds_cache/libero
   context_len: 128
   encoder_id: wan22ti2v5b
   prompt_template: "A video recorded from a robot's point of view executing the following instruction: {task}"

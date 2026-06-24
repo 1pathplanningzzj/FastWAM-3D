@@ -8,6 +8,11 @@ import torch
 from safetensors import safe_open
 
 
+def _default_model_base_path() -> str:
+    gaussianwam_root = os.environ.get("GAUSSIANWAM_ROOT", "/data/zijianzhang/gaussianwam_data")
+    return os.path.join(gaussianwam_root, "checkpoints")
+
+
 @dataclass
 class ModelConfig:
     path: Union[str, list[str], None] = None
@@ -49,7 +54,7 @@ class ModelConfig:
         if os.environ.get("DIFFSYNTH_MODEL_BASE_PATH") is not None:
             self.local_model_path = os.environ.get("DIFFSYNTH_MODEL_BASE_PATH")
         elif self.local_model_path is None:
-            self.local_model_path = "./checkpoints/"
+            self.local_model_path = _default_model_base_path()
 
     def require_downloading(self):
         if self.path is not None:

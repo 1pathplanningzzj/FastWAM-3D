@@ -4,12 +4,8 @@ import math
 import time
 import pathlib
 
-import imageio
 from PIL import Image, ImageDraw
 import numpy as np
-from libero.libero import get_libero_path
-from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
-from fastwam.utils.video_io import save_mp4
 
 DATE = time.strftime("%Y_%m_%d")
 DATE_TIME = time.strftime("%Y_%m_%d-%H_%M_%S")
@@ -18,6 +14,9 @@ LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 
 def get_libero_env(task, resolution, seed, env_num=1):
     """Initializes and returns the LIBERO environment, along with the task description."""
+    from libero.libero import get_libero_path
+    from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv
+
     task_description = task.language
     task_bddl_file = (
         pathlib.Path(get_libero_path("bddl_files"))
@@ -25,7 +24,7 @@ def get_libero_env(task, resolution, seed, env_num=1):
         / task.bddl_file
     )
     env_args = {
-        "bddl_file_name": task_bddl_file,
+        "bddl_file_name": str(task_bddl_file),
         "camera_heights": resolution,
         "camera_widths": resolution,
     }
@@ -58,6 +57,8 @@ def get_libero_image(obs):
 
 def save_rollout_video(rollout_dir, rollout_images, idx, success, task_description, log_file=None, fps=24):
     """Saves an MP4 replay of an episode."""
+    import imageio
+
     processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
     mp4_path = f"{rollout_dir}/{DATE_TIME}--episode={idx}--success={success}--task={processed_task_description}.mp4"
     video_writer = imageio.get_writer(mp4_path, fps=fps)
@@ -95,6 +96,8 @@ def save_prediction_video(
     fps=8,
 ):
     """Saves an MP4 comparison of ground-truth and predicted future frames for one replanning clip."""
+    import imageio
+
     num_frames = min(len(gt_frames), len(pred_frames))
     if num_frames <= 0:
         raise ValueError("Cannot save prediction video with empty GT/pred frame lists.")

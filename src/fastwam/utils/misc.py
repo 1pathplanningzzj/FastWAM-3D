@@ -30,7 +30,14 @@ from torch.distributed._functional_collectives import AsyncCollectiveTensor
 from torch.distributed._tensor.api import DTensor
 
 _WORK_DIR: str | None = None
-_DEFAULT_WORK_DIR = "./runs/"
+
+
+def _default_work_dir() -> str:
+    runs_root = os.environ.get("RUNS_ROOT")
+    if runs_root:
+        return runs_root
+    gaussianwam_root = os.environ.get("GAUSSIANWAM_ROOT", "/data/zijianzhang/gaussianwam_data")
+    return str(Path(gaussianwam_root) / "runs")
 
 
 def register_work_dir(path: str | os.PathLike | None) -> None:
@@ -40,4 +47,4 @@ def register_work_dir(path: str | os.PathLike | None) -> None:
 
 
 def get_work_dir() -> str | None:
-    return _WORK_DIR if _WORK_DIR is not None else _DEFAULT_WORK_DIR
+    return _WORK_DIR if _WORK_DIR is not None else _default_work_dir()

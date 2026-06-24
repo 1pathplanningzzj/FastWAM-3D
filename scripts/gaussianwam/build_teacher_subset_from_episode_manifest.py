@@ -59,7 +59,7 @@ def main() -> None:
     )
     parser.add_argument("--config", default="configs/gaussianwam/stage1_robotwin_demo_subset.yaml")
     parser.add_argument("--episode-manifest", required=True)
-    parser.add_argument("--episodes-stats", default="data/robotwin2.0/robotwin2.0/meta/episodes_stats.jsonl")
+    parser.add_argument("--episodes-stats", default="/data/zijianzhang/gaussianwam_data/data/robotwin2.0/robotwin2.0/meta/episodes_stats.jsonl")
     parser.add_argument("--output", required=True)
     parser.add_argument(
         "--frame-policy",

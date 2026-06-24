@@ -5,6 +5,10 @@ defaults:
   - override /model: gaussianwam
   - _self_
 
+gaussianwam_root: ${oc.env:GAUSSIANWAM_ROOT,/data/zijianzhang/gaussianwam_data}
+fastwam_release_root: ${oc.env:FASTWAM_RELEASE_ROOT,${gaussianwam_root}/checkpoints/fastwam_release}
+robotwin_data_root: ${oc.env:ROBOTWIN_DATA_ROOT,${gaussianwam_root}/data/robotwin2.0}
+
 # dataloading
 batch_size: 8
 num_workers: 8
@@ -24,13 +28,13 @@ eval_every: 500
 # training
 gradient_accumulation_steps: 2
 weight_decay: 1e-2
-resume: /data/zijianzhang/FastWAM/checkpoints/fastwam_release/robotwin_uncond_3cam_384.pt
+resume: ${fastwam_release_root}/robotwin_uncond_3cam_384.pt
 
 data:
   train:
-    episode_subset_manifest: ./data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug.jsonl
+    episode_subset_manifest: ${robotwin_data_root}/subsets/stage2_focus3_switch_microwave_mug.jsonl
   val:
-    episode_subset_manifest: ./data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug.jsonl
+    episode_subset_manifest: ${robotwin_data_root}/subsets/stage2_focus3_switch_microwave_mug.jsonl
 
 gaussianwam:
   enabled: true

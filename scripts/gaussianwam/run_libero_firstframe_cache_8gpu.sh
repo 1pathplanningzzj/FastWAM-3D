@@ -13,7 +13,8 @@ START_IDX="${START_IDX:-0}"
 
 export REPO_ROOT
 export CONFIG
-export LIBERO_DATA_ROOT="${LIBERO_DATA_ROOT:-${REPO_ROOT}/data/libero_mujoco3.3.2}"
+export GAUSSIANWAM_ROOT="${GAUSSIANWAM_ROOT:-/data/zijianzhang/gaussianwam_data}"
+export LIBERO_DATA_ROOT="${LIBERO_DATA_ROOT:-${GAUSSIANWAM_ROOT}/data/libero_mujoco3.3.2}"
 export HF_HOME="${HF_HOME:-${REPO_ROOT}/.hf_cache}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_HOME}/datasets}"
 export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-${HF_HOME}/hub}"
@@ -55,7 +56,7 @@ fi
 TOTAL_WORK=$(( END_IDX - START_IDX ))
 CHUNK=$(( (TOTAL_WORK + NUM_WORKERS - 1) / NUM_WORKERS ))
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
-LOG_DIR="${REPO_ROOT}/data/libero_teacher_cache/logs/${CACHE_NAMESPACE}_${RUN_TAG}"
+LOG_DIR="${GAUSSIANWAM_ROOT}/data/libero_teacher_cache/logs/${CACHE_NAMESPACE}_${RUN_TAG}"
 mkdir -p "${LOG_DIR}"
 
 echo "CONFIG=${CONFIG}" | tee "${LOG_DIR}/manager.log"

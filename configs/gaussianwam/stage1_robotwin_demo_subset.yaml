@@ -1,12 +1,18 @@
-output_dir: ./data/robotwin2.0/gaussian_teacher_cache
+gaussianwam_root: ${oc.env:GAUSSIANWAM_ROOT,/data/zijianzhang/gaussianwam_data}
+robotwin_data_root: ${oc.env:ROBOTWIN_DATA_ROOT,${gaussianwam_root}/data/robotwin2.0}
+robotwin_dataset_root: ${robotwin_data_root}/robotwin2.0
+robotwin_text_cache_root: ${gaussianwam_root}/data/text_embeds_cache/robotwin
+gaussianwam_ckpt_root: ${oc.env:GAUSSIANWAM_CKPT_ROOT,${gaussianwam_root}/checkpoints/gaussianwam}
+
+output_dir: ${robotwin_data_root}/gaussian_teacher_cache
 split: train
 seed: 42
 device: cuda
 
 source:
   dataset_dirs:
-    - ./data/robotwin2.0/robotwin2.0
-  subset_manifest: ./data/robotwin2.0/gaussian_teacher_subsets/demo_subset_smoke.jsonl
+    - ${robotwin_dataset_root}
+  subset_manifest: ${robotwin_data_root}/gaussian_teacher_subsets/demo_subset_smoke.jsonl
   camera_keys: [cam_high, cam_left_wrist, cam_right_wrist]
   num_frames: 33
   action_video_freq_ratio: 4
@@ -41,7 +47,7 @@ clip:
     checkpoint_path: ""
 
 text_cache:
-  dir: ./data/text_embeds_cache/robotwin
+  dir: ${robotwin_text_cache_root}
   context_len: 128
   encoder_id: wan22ti2v5b
   prompt_template: "A video recorded from a robot's point of view executing the following instruction: {task}"

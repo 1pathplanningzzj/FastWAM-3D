@@ -1,7 +1,13 @@
+gaussianwam_root: ${oc.env:GAUSSIANWAM_ROOT,/data/zijianzhang/gaussianwam_data}
+robotwin_data_root: ${oc.env:ROBOTWIN_DATA_ROOT,${data.gaussianwam_root}/data/robotwin2.0}
+robotwin_dataset_root: ${data.robotwin_data_root}/robotwin2.0
+robotwin_text_cache_root: ${data.gaussianwam_root}/data/text_embeds_cache/robotwin
+robotwin_teacher_root: ${data.robotwin_data_root}/gaussian_teacher_cache
+
 train:
   _target_: fastwam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
   dataset_dirs:
-    - ./data/robotwin2.0/robotwin2.0
+    - ${data.robotwin_dataset_root}
   episode_subset_manifest: null
   shape_meta:
     images:
@@ -29,7 +35,7 @@ train:
   camera_key: null
   val_set_proportion: 0.01
   is_training_set: true
-  pretrained_norm_stats: ./data/robotwin2.0/dataset_stats.json
+  pretrained_norm_stats: ${data.robotwin_data_root}/dataset_stats.json
   skip_padding_as_possible: false
   concat_multi_camera: "robotwin"
   processor:
@@ -56,11 +62,11 @@ train:
       - _target_: fastwam.datasets.lerobot.transforms.image.ToTensor
       - _target_: torchvision.transforms.Resize
         size: [240, 320]
-  text_embedding_cache_dir: ./data/text_embeds_cache/robotwin
+  text_embedding_cache_dir: ${data.robotwin_text_cache_root}
   context_len: 128
   gaussian_teacher:
     enabled: true
-    manifest_path: ./data/robotwin2.0/gaussian_teacher_cache/v4/gaussian_vggt256text_3d_first_demo_subset_v1/train/manifest.jsonl
+    manifest_path: ${data.robotwin_teacher_root}/v4/gaussian_vggt256text_3d_first_demo_subset_v1/train/manifest.jsonl
     restrict_to_cache: false
     expected_target_offset: 32
     expected_camera_keys: [cam_high, cam_left_wrist, cam_right_wrist]
@@ -81,7 +87,7 @@ train:
 val:
   _target_: fastwam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
   dataset_dirs:
-    - ./data/robotwin2.0/robotwin2.0/
+    - ${data.robotwin_dataset_root}
   episode_subset_manifest: null
   shape_meta:
     images:
@@ -109,7 +115,7 @@ val:
   camera_key: null
   val_set_proportion: 0.01
   is_training_set: false
-  pretrained_norm_stats: ./data/robotwin2.0/dataset_stats.json
+  pretrained_norm_stats: ${data.robotwin_data_root}/dataset_stats.json
   skip_padding_as_possible: false
   concat_multi_camera: "robotwin"
   processor:
@@ -136,12 +142,12 @@ val:
       - _target_: fastwam.datasets.lerobot.transforms.image.ToTensor
       - _target_: torchvision.transforms.Resize
         size: [240, 320]
-  text_embedding_cache_dir: ./data/text_embeds_cache/robotwin
+  text_embedding_cache_dir: ${data.robotwin_text_cache_root}
   context_len: 128
 
 gaussian_teacher:
   enabled: false
-  cache_dir: ./data/robotwin2.0/gaussian_teacher_cache
+  cache_dir: ${data.robotwin_teacher_root}
   targets:
     dense_3d: true
     depth: true

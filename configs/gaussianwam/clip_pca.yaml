@@ -1,10 +1,14 @@
-output_path: ./checkpoints/gaussianwam/clip_pca_32d.pt
+gaussianwam_root: ${oc.env:GAUSSIANWAM_ROOT,/data/zijianzhang/gaussianwam_data}
+robotwin_data_root: ${oc.env:ROBOTWIN_DATA_ROOT,${gaussianwam_root}/data/robotwin2.0}
+robotwin_dataset_root: ${robotwin_data_root}/robotwin2.0
+
+output_path: ${gaussianwam_root}/checkpoints/gaussianwam/clip_pca_32d.pt
 seed: 42
 device: cuda
 
 source:
   dataset_dirs:
-    - ./data/robotwin2.0/robotwin2.0
+    - ${robotwin_dataset_root}
   camera_keys: [cam_high, cam_left_wrist, cam_right_wrist]
   num_frames: 33
   action_video_freq_ratio: 4

@@ -6,11 +6,11 @@ defaults:
   - _self_
 
 # dataloading
-batch_size: 16
+batch_size: 2
 num_workers: 8
 
 model:
-  mot_checkpoint_mixed_attn: false
+  mot_checkpoint_mixed_attn: true
 
 # scheduler
 lr_scheduler_type: "cosine"
@@ -22,7 +22,7 @@ save_every: 2000
 eval_every: 200
 
 # training
-gradient_accumulation_steps: 1
+gradient_accumulation_steps: 2
 weight_decay: 1e-2
 gaussianwam_root: ${oc.env:GAUSSIANWAM_ROOT,/data/zijianzhang/gaussianwam_data}
 fastwam_release_root: ${oc.env:FASTWAM_RELEASE_ROOT,${gaussianwam_root}/checkpoints/fastwam_release}
@@ -39,9 +39,9 @@ gaussianwam:
   lambda_depth: 0.01
   lambda_alpha: 0.005
   freeze:
-    action_expert: true
-    mot: true
-    video_expert_train_last_n_layers: 2
+    action_expert: false
+    mot: false
+    video_expert_train_last_n_layers: 0
     train_projection_heads: true
     train_depth_head: true
     train_alpha_head: true

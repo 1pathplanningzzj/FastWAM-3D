@@ -1,4 +1,7 @@
-libero_data_root: ${oc.env:LIBERO_DATA_ROOT,./data/libero_mujoco3.3.2}
+gaussianwam_root: ${oc.env:GAUSSIANWAM_ROOT,/data/zijianzhang/gaussianwam_data}
+libero_data_root: ${oc.env:LIBERO_DATA_ROOT,${data.gaussianwam_root}/data/libero_mujoco3.3.2}
+libero_text_cache_root: ${data.gaussianwam_root}/data/text_embeds_cache/libero
+libero_teacher_root: ${data.gaussianwam_root}/data/libero_teacher_cache
 
 train:
   _target_: fastwam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
@@ -56,11 +59,11 @@ train:
       - _target_: fastwam.datasets.lerobot.transforms.image.ToTensor
       - _target_: torchvision.transforms.Resize
         size: [224, 224]
-  text_embedding_cache_dir: ./data/text_embeds_cache/libero
+  text_embedding_cache_dir: ${data.libero_text_cache_root}
   context_len: 128
   gaussian_teacher:
     enabled: true
-    manifest_path: ./data/libero_teacher_cache/v1/gaussian_vggt256text_3d_libero_firstframe_all_v1/train/manifest.jsonl
+    manifest_path: ${data.libero_teacher_root}/v1/gaussian_vggt256text_3d_libero_firstframe_all_v1/train/manifest.jsonl
     restrict_to_cache: false
     expected_target_offset: 0
     expected_camera_keys: [image, wrist_image]

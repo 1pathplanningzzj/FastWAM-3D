@@ -33,7 +33,7 @@ def _episode_anchors(start: int, end: int, num_frames: int, action_video_freq_ra
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a demo/episode-balanced GaussianWAM teacher subset manifest.")
     parser.add_argument("--config", default="configs/gaussianwam/stage1_robotwin_learn_feature_z.yaml")
-    parser.add_argument("--output", default="data/robotwin2.0/gaussian_teacher_subsets/demo_subset.jsonl")
+    parser.add_argument("--output", default="/data/zijianzhang/gaussianwam_data/data/robotwin2.0/gaussian_teacher_subsets/demo_subset.jsonl")
     parser.add_argument("--mode", choices=["episodes", "instruction_tasks"], default="episodes")
     parser.add_argument("--num-demos", type=int, default=100)
     parser.add_argument("--start-demo", type=int, default=0)

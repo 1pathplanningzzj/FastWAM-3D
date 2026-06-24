@@ -206,6 +206,104 @@ python experiments/libero/run_libero_manager.py \
   MULTIRUN.num_gpus=8
 ```
 
+### LIBERO-Plus evaluation
+
+`LIBERO-Plus` is evaluated with a separate entrypoint and uses perturbation-expanded task suites.
+Compared with standard `LIBERO`, each suite contains many more tasks:
+
+- `libero_spatial`: `2402`
+- `libero_object`: `2518`
+- `libero_goal`: `2591`
+- `libero_10`: `2519`
+
+The current code supports both:
+
+- single-task eval: [`experiments/libero/eval_libero_plus.py`](./experiments/libero/eval_libero_plus.py)
+- tmux multi-GPU manager: [`experiments/libero/run_libero_plus_manager.py`](./experiments/libero/run_libero_plus_manager.py)
+
+Required runtime root:
+
+```bash
+export LIBERO_PLUS_ROOT=/data/zijianzhang/libero_datasets/LIBERO-plus/libero/libero
+```
+
+Recommended protocol for comparing against VLA-JEPA:
+
+- use `1` rollout per perturbation task
+- evaluate all perturbation-expanded tasks
+- aggregate results by perturbation category:
+  `Camera / Robot / Language / Light / Background / Noise / Layout / Avg`
+
+Example full 4-GPU eval:
+
+```bash
+MPLCONFIGDIR=/tmp/matplotlib-fastwam-libero \
+CUDA_VISIBLE_DEVICES=0,5,6,7 \
+LIBERO_PLUS_ROOT=/data/zijianzhang/libero_datasets/LIBERO-plus/libero/libero \
+python experiments/libero/run_libero_plus_manager.py \
+  task=libero_gaussianwam_stage2_current_2cam224_1e-4 \
+  ckpt=/data/zijianzhang/gaussianwam_data/runs/libero_gaussianwam_stage2_current_2cam224_1e-4/2026-06-14_12-41-35_gpus0-5-6-7_resume_from10k_v2/checkpoints/weights/step_016000.pt \
+  EVALUATION.output_dir=/data/zijianzhang/FastWAM/evaluate_results/libero/libero_gaussianwam_stage2_current_2cam224_1e-4/20260615_plus_step016000_gpus0-5-6-7_1trial \
+  MULTIRUN.num_gpus=4 \
+  MULTIRUN.max_tasks_per_gpu=2 \
+  MULTIRUN.task_suite_names='[libero_spatial,libero_object,libero_goal,libero_10]' \
+  EVALUATION.num_trials=1
+```
+
+Single-task debug example:
+
+```bash
+MPLCONFIGDIR=/tmp/matplotlib-fastwam-libero \
+LIBERO_PLUS_ROOT=/data/zijianzhang/libero_datasets/LIBERO-plus/libero/libero \
+python experiments/libero/eval_libero_plus.py \
+  task=libero_gaussianwam_stage2_current_2cam224_1e-4 \
+  ckpt=/path/to/step.pt \
+  EVALUATION.task_suite_name=libero_spatial \
+  EVALUATION.task_id=0 \
+  EVALUATION.num_trials=1
+```
+
+You can optionally restrict eval to one perturbation category:
+
+```bash
+EVALUATION.plus_category='Background Textures'
+```
+
+Category summary helper:
+
+```bash
+python experiments/libero/summarize_libero_plus_results.py \
+  --output_dir /path/to/libero_plus_eval_dir
+```
+
+This prints:
+
+```text
+Camera Robot Language Light Background Noise Layout Avg
+```
+
+Result JSONs are stored by suite and perturbation category, for example:
+
+```text
+<output_dir>/libero_spatial/Camera/gpu0_task4_results.json
+```
+
+Each JSON also records:
+
+- `plus_category`: full category name such as `Camera Viewpoints`
+- `plus_category_short`: short bucket such as `Camera`
+
+Notes for this repo:
+
+- `LIBERO-Plus` must import its own Python package tree, not only its data root.
+- The runtime helper in [`experiments/libero/libero_plus_benchmark.py`](./experiments/libero/libero_plus_benchmark.py)
+  injects the correct repo root into `sys.path` and clears stale `libero.*` imports.
+- The local eval environment may not have the `wand` dependency used by LIBERO-Plus motion blur corruptions.
+  The helper installs a minimal fallback stub so non-`wand` tasks can still run.
+- `LIBERO-Plus` environment code expects `bddl_file_name` as `str`, so
+  [`experiments/libero/libero_utils.py`](./experiments/libero/libero_utils.py)
+  now converts `Path` to `str` before constructing the env.
+
 Optional: evaluate released RoboTwin checkpoint:
 
 ```bash

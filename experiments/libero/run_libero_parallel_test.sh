@@ -19,8 +19,22 @@ run_libero_eval() {
     # Basic configuration
     ROOT_DIR=${ROOT_DIR:-"$(pwd)"}
     export ROOT_DIR
+    GAUSSIANWAM_ROOT=${GAUSSIANWAM_ROOT:-/data/zijianzhang/gaussianwam_data}
+    export GAUSSIANWAM_ROOT
+    DIFFSYNTH_MODEL_BASE_PATH=${DIFFSYNTH_MODEL_BASE_PATH:-${GAUSSIANWAM_ROOT}/checkpoints}
+    export DIFFSYNTH_MODEL_BASE_PATH
     PYTHON_BIN=${PYTHON_BIN:-/data/miniconda3/envs/fastwam-libero/bin/python}
     export PYTHON_BIN
+    EVAL_ENTRY=${EVAL_ENTRY:-experiments/libero/eval_libero_single.py}
+    export EVAL_ENTRY
+    SUMMARY_ENTRY=${SUMMARY_ENTRY:-experiments/libero/summarize_results.py}
+    export SUMMARY_ENTRY
+    MPLCONFIGDIR=${MPLCONFIGDIR:-/tmp/matplotlib-fastwam-libero}
+    export MPLCONFIGDIR
+    MUJOCO_GL=${MUJOCO_GL:-egl}
+    export MUJOCO_GL
+    PYOPENGL_PLATFORM=${PYOPENGL_PLATFORM:-egl}
+    export PYOPENGL_PLATFORM
     # Generate a unique run_id
     RUN_ID=${RUN_ID:-"eval_$(date +%Y%m%d_%H%M%S)"}
     export RUN_ID
@@ -242,6 +256,15 @@ run_libero_eval() {
         local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
         echo "$timestamp,$suite,$task_id,gpu=$gpu_id,rc=$return_code,log=$log_file" >> "$FAILED_TASKS_FILE"
     }
+
+    task_result_exists() {
+        local suite=$1
+        local task_id=$2
+        local gpu_pattern=${3:-*}
+        local suite_dir="$OUTPUT_DIR/$suite"
+        [ -d "$suite_dir" ] || return 1
+        [ -n "$(find "$suite_dir" -type f -name "gpu${gpu_pattern}_task${task_id}_results.json" -print -quit 2>/dev/null)" ]
+    }
     
     # Checkpoint and config
     CKPT=${CKPT:-""}
@@ -258,7 +281,13 @@ run_libero_eval() {
     echo "CKPT: $CKPT"
     echo "CONFIG: $CONFIG"
     echo "ROOT_DIR: $ROOT_DIR"
+    echo "GAUSSIANWAM_ROOT: $GAUSSIANWAM_ROOT"
+    echo "DIFFSYNTH_MODEL_BASE_PATH: $DIFFSYNTH_MODEL_BASE_PATH"
     echo "PYTHON_BIN: $PYTHON_BIN"
+    echo "EVAL_ENTRY: $EVAL_ENTRY"
+    echo "MPLCONFIGDIR: $MPLCONFIGDIR"
+    echo "MUJOCO_GL: $MUJOCO_GL"
+    echo "PYOPENGL_PLATFORM: $PYOPENGL_PLATFORM"
     echo "NUM_GPUS: $NUM_GPUS"
     echo "MAX_TASKS_PER_GPU: $MAX_TASKS_PER_GPU"
     
@@ -328,7 +357,8 @@ run_libero_eval() {
         local gpu_id=$3
         local pane_info=$4
         local status_file="$TASK_STATUS_DIR/${suite}_task${task_id}.status"
-        local result_file="$OUTPUT_DIR/$suite/gpu${gpu_id}_task${task_id}_results.json"
+        local result_dir="$OUTPUT_DIR/$suite"
+        local result_name="gpu${gpu_id}_task${task_id}_results.json"
         local log_file="$TASK_LOG_DIR/${suite}_task${task_id}_gpu${gpu_id}.log"
         
         rm -f "$status_file"
@@ -339,13 +369,13 @@ run_libero_eval() {
         tmux select-pane -t $SESSION_NAME:$pane_info 2>/dev/null
         tmux send-keys -t $SESSION_NAME:$pane_info "clear" C-m 2>/dev/null
         tmux send-keys -t $SESSION_NAME:$pane_info "source ~/.bashrc && cd $ROOT_DIR && export EXP_NAME=$EXP_NAME && \
-            STATUS_FILE='$status_file' LOG_FILE='$log_file' RESULT_FILE='$result_file' && \
-            CUDA_VISIBLE_DEVICES=$gpu_id PYTHONPATH='$PYTHONPATH' LIBERO_DATA_ROOT='$LIBERO_DATA_ROOT' MUJOCO_GL='${MUJOCO_GL:-}' PYOPENGL_PLATFORM='${PYOPENGL_PLATFORM:-}' MPLCONFIGDIR='${MPLCONFIGDIR:-}' '$PYTHON_BIN' experiments/libero/eval_libero_single.py \
+            STATUS_FILE='$status_file' LOG_FILE='$log_file' RESULT_DIR='$result_dir' RESULT_NAME='$result_name' && \
+            CUDA_VISIBLE_DEVICES=$gpu_id PYTHONPATH='$PYTHONPATH' LIBERO_DATA_ROOT='$LIBERO_DATA_ROOT' MUJOCO_GL='${MUJOCO_GL:-}' PYOPENGL_PLATFORM='${PYOPENGL_PLATFORM:-}' MPLCONFIGDIR='${MPLCONFIGDIR:-}' '$PYTHON_BIN' '$EVAL_ENTRY' \
             task=$CONFIG ckpt=$CKPT \
             EVALUATION.task_suite_name=$suite EVALUATION.task_id=$task_id gpu_id=$gpu_id \
             EVALUATION.num_trials=$NUM_TRIALS EVALUATION.output_dir=$OUTPUT_DIR $EXTRA_ARGS > \"\$LOG_FILE\" 2>&1; \
             rc=\$?; \
-            if [ \$rc -eq 0 ] && [ -f \"\$RESULT_FILE\" ]; then \
+            if [ \$rc -eq 0 ] && [ -n \"\$(find \"\$RESULT_DIR\" -type f -name \"\$RESULT_NAME\" -print -quit 2>/dev/null)\" ]; then \
                 echo \"SUCCESS|$gpu_id|\$rc|\$(date +%s)|\$LOG_FILE\" > \"\$STATUS_FILE\"; \
             else \
                 echo \"FAILED|$gpu_id|\$rc|\$(date +%s)|\$LOG_FILE\" > \"\$STATUS_FILE\"; \
@@ -384,10 +414,8 @@ run_libero_eval() {
             [ -z "$suite" ] || [ -z "$task_id" ] && continue
 
             local status_file="$TASK_STATUS_DIR/${suite}_task${task_id}.status"
-            local any_result_pattern="$OUTPUT_DIR/$suite/gpu*_task${task_id}_results.json"
-
             # The result file exists: the task succeeded, so release the mapping and GPU load
-            if ls $any_result_pattern 1> /dev/null 2>&1; then
+            if task_result_exists "$suite" "$task_id"; then
                 local new_load=$(decrement_gpu_load "$gpu_id")
                 rm -f "$status_file"
                 ((CLEANED_COUNT++))
@@ -539,8 +567,7 @@ run_libero_eval() {
             [ -z "$suite" ] && continue
 
             # Check whether the task is already complete
-            result_file_pattern="$OUTPUT_DIR/$suite/gpu*_task${task_id}_results.json"
-            if ls $result_file_pattern 1> /dev/null 2>&1; then
+            if task_result_exists "$suite" "$task_id"; then
                 continue
             fi
 
@@ -628,7 +655,7 @@ run_libero_eval() {
     echo "All tasks completed successfully!"
     # Run the result summarization script
     echo "Generating evaluation report..."
-    python experiments/libero/summarize_results.py --output_dir="$OUTPUT_DIR"
+    python "$SUMMARY_ENTRY" --output_dir="$OUTPUT_DIR"
 }
 
 

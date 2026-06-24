@@ -37,14 +37,13 @@ from experiments.libero.libero_utils import (
 )
 from fastwam.datasets.lerobot.processors.fastwam_processor import FastWAMProcessor
 from fastwam.datasets.lerobot.utils.normalizer import load_dataset_stats_from_json
+from fastwam.utils.config_resolvers import register_default_resolvers
 from fastwam.utils.pytorch_utils import set_global_seed
 from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from libero.libero import benchmark
 from action_ensembler import ActionEnsembler
 
-OmegaConf.register_new_resolver("eval", eval)
-OmegaConf.register_new_resolver("max", lambda x: max(x))
-OmegaConf.register_new_resolver("split", lambda s, idx: s.split("/")[int(idx)])
+register_default_resolvers()
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -323,6 +322,16 @@ def _validate_visualize_future_video_cfg(cfg: DictConfig) -> None:
             "EVALUATION.visualize_future_video=true requires "
             "model.video_dit_config.action_conditioned=false."
         )
+
+
+def _safe_close_env(env) -> None:
+    close_fn = getattr(env, "close", None)
+    if close_fn is None:
+        return
+    try:
+        close_fn()
+    except Exception as exc:  # pragma: no cover - cleanup guard
+        logging.warning("Failed to close LIBERO env cleanly: %s", exc)
 
 
 def _select_predicted_future_frames(pred_video: list[Image.Image], cfg: DictConfig) -> list[Image.Image]:
@@ -641,66 +650,69 @@ def run_single_task(
         results["episode_future_video_psnr"] = []
         results["future_video_psnr_mean"] = None
 
-    for trial_idx in range(int(cfg.EVALUATION.num_trials)):
-        success, replay_images, predicted_future_video_clips, episode_mean_psnr = run_single_episode(
-            env=env,
-            initial_state=initial_states[trial_idx],
-            task_description=task_description,
-            model=model,
-            processor=processor,
-            cfg=cfg,
-            episode_idx=trial_idx,
-            action_horizon=action_horizon,
-            input_w=input_w,
-            input_h=input_h,
-            model_device=model_device,
-        )
-        if success:
-            results["successes"] += 1
-            results["success_episodes"].append(trial_idx)
-        else:
-            results["failure_episodes"].append(trial_idx)
-        if visualize_future_video:
-            results["episode_future_video_psnr"].append(episode_mean_psnr)
-
-        save_rollout_video(
-            video_dir,
-            replay_images,
-            f"task{cfg.EVALUATION.task_id}_trial{trial_idx}",
-            success=success,
-            task_description=task_description,
-        )
-        if visualize_future_video:
-            if len(predicted_future_video_clips) == 0:
-                logging.warning(
-                    "No predicted future frames collected for task %s trial %s.",
-                    cfg.EVALUATION.task_id,
-                    trial_idx,
-                )
+    try:
+        for trial_idx in range(int(cfg.EVALUATION.num_trials)):
+            success, replay_images, predicted_future_video_clips, episode_mean_psnr = run_single_episode(
+                env=env,
+                initial_state=initial_states[trial_idx],
+                task_description=task_description,
+                model=model,
+                processor=processor,
+                cfg=cfg,
+                episode_idx=trial_idx,
+                action_horizon=action_horizon,
+                input_w=input_w,
+                input_h=input_h,
+                model_device=model_device,
+            )
+            if success:
+                results["successes"] += 1
+                results["success_episodes"].append(trial_idx)
             else:
-                all_gt_frames = []
-                all_pred_frames = []
-                for clip in predicted_future_video_clips:
-                    all_gt_frames.extend(clip["gt_frames"])
-                    all_pred_frames.extend(clip["pred_frames"])
+                results["failure_episodes"].append(trial_idx)
+            if visualize_future_video:
+                results["episode_future_video_psnr"].append(episode_mean_psnr)
+
+            save_rollout_video(
+                video_dir,
+                replay_images,
+                f"task{cfg.EVALUATION.task_id}_trial{trial_idx}",
+                success=success,
+                task_description=task_description,
+            )
+            if visualize_future_video:
+                if len(predicted_future_video_clips) == 0:
+                    logging.warning(
+                        "No predicted future frames collected for task %s trial %s.",
+                        cfg.EVALUATION.task_id,
+                        trial_idx,
+                    )
+                else:
+                    all_gt_frames = []
+                    all_pred_frames = []
+                    for clip in predicted_future_video_clips:
+                        all_gt_frames.extend(clip["gt_frames"])
+                        all_pred_frames.extend(clip["pred_frames"])
+                        save_prediction_video(
+                            predicted_video_dir,
+                            clip["gt_frames"],
+                            clip["pred_frames"],
+                            f"task{cfg.EVALUATION.task_id}_trial{trial_idx}",
+                            clip["replan_idx"],
+                            success=success,
+                            task_description=task_description,
+                        )
                     save_prediction_video(
                         predicted_video_dir,
-                        clip["gt_frames"],
-                        clip["pred_frames"],
+                        all_gt_frames,
+                        all_pred_frames,
                         f"task{cfg.EVALUATION.task_id}_trial{trial_idx}",
-                        clip["replan_idx"],
+                        "all",
                         success=success,
                         task_description=task_description,
                     )
-                save_prediction_video(
-                    predicted_video_dir,
-                    all_gt_frames,
-                    all_pred_frames,
-                    f"task{cfg.EVALUATION.task_id}_trial{trial_idx}",
-                    "all",
-                    success=success,
-                    task_description=task_description,
-                )
+    finally:
+        _safe_close_env(env)
 
     if visualize_future_video:
         valid_episode_psnr = [x for x in results["episode_future_video_psnr"] if x is not None]

@@ -333,6 +333,23 @@ tmux attach -t "$SESSION"
 tail -f "$LOG"
 ```
 
+如果你想在 LIBERO 上跑一个 `first-frame + full fine-tune` 的 GaussianWAM Stage 2 训练，可以用下面这个 2 卡启动命令：
+
+```bash
+RUN_ID="$(date +%Y-%m-%d_%H-%M-%S)_gpus2-3_tmux"
+SESSION="libero_gaussianwam_fullft_gpus2_3_$(date +%H%M%S)"
+LOG="/data/zijianzhang/gaussianwam_data/runs/libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4/${RUN_ID}/launch.log"
+mkdir -p "$(dirname "$LOG")"
+
+tmux new-session -d -s "$SESSION" \
+  "cd /data/zijianzhang/FastWAM && \
+   export CUDA_VISIBLE_DEVICES=2,3 RUN_ID=$RUN_ID LIBERO_DATA_ROOT=/data/zijianzhang/libero_mujoco3.3.2 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+   /data/miniconda3/bin/conda run --no-capture-output -n fastwam \
+   bash scripts/train_zero1.sh 2 \
+   task=libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4 \
+   data.libero_text_cache_root=/data/zijianzhang/gaussianwam_data/data/text_embeds_cache/libero 2>&1 | tee $LOG"
+```
+
 如果你想只训练一个更小的 3-task 子集（`switch` / `microwave` / `mug`），可以用下面这个 Stage 2 启动命令：
 
 ```bash

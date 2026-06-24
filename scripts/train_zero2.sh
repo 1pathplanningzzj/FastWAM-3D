@@ -9,6 +9,12 @@ NUM_MACHINES="${NNODES:-1}"
 MACHINE_RANK="${NODE_RANK:-0}"
 MAIN_PROCESS_IP="${MASTER_ADDR:-127.0.0.1}"
 MAIN_PROCESS_PORT="${MASTER_PORT:-29500}"
+GAUSSIANWAM_ROOT="${GAUSSIANWAM_ROOT:-/data/zijianzhang/gaussianwam_data}"
+RUNS_ROOT="${RUNS_ROOT:-${GAUSSIANWAM_ROOT}/runs}"
+DIFFSYNTH_MODEL_BASE_PATH="${DIFFSYNTH_MODEL_BASE_PATH:-${GAUSSIANWAM_ROOT}/checkpoints}"
+
+export GAUSSIANWAM_ROOT RUNS_ROOT DIFFSYNTH_MODEL_BASE_PATH
+mkdir -p "${RUNS_ROOT}"
 
 is_integer() {
   [[ "${1}" =~ ^[0-9]+$ ]]
@@ -111,6 +117,6 @@ accelerate launch \
   --config_file scripts/accelerate_configs/accelerate_zero2_ds.yaml \
   --num_processes "${NPROC_PER_NODE}" \
   scripts/train.py \
-  "output_dir=./runs/${TASK_BASENAME}/${RUN_ID}" \
+  "output_dir=${RUNS_ROOT}/${TASK_BASENAME}/${RUN_ID}" \
   "wandb.name=${TASK_BASENAME}" \
   "${EXTRA_ARGS[@]}"

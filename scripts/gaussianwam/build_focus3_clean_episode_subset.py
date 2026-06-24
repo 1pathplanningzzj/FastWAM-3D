@@ -35,8 +35,8 @@ def classify_episode(tasks: list[str]) -> str | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a clean focus3 RoboTwin episode subset using true prompt semantics.")
-    parser.add_argument("--episodes", default="data/robotwin2.0/robotwin2.0/meta/episodes.jsonl")
-    parser.add_argument("--output", default="data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug_clean.jsonl")
+    parser.add_argument("--episodes", default="/data/zijianzhang/gaussianwam_data/data/robotwin2.0/robotwin2.0/meta/episodes.jsonl")
+    parser.add_argument("--output", default="/data/zijianzhang/gaussianwam_data/data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug_clean.jsonl")
     args = parser.parse_args()
 
     rows: list[dict] = []
@@ -52,7 +52,7 @@ def main() -> None:
             if matched is None:
                 continue
             out_row = {
-                "dataset_dir": "./data/robotwin2.0/robotwin2.0",
+                "dataset_dir": "/data/zijianzhang/gaussianwam_data/data/robotwin2.0/robotwin2.0",
                 "episode_index": int(row["episode_index"]),
                 "matched_keywords": [matched],
                 "num_prompts": len(row["tasks"]),
