@@ -150,6 +150,54 @@ tmux new-session -d -s "$SESSION" \
   - `speed=0.41 step/s`
   - `3.32 samples/s`
 
+### LIBERO full-teacher `bs=4` reference run
+
+- Reference run:
+  - `libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4/2026-06-17_12-19-41_gpus0-5-6-7_bs4_tmux`
+- Launch GPUs:
+  - `0,5,6,7`
+- Config snapshot:
+  - `batch_size=4`
+  - `gradient_accumulation_steps=2`
+  - `teacher_targets=[dense_3d, depth, alpha, valid_mask]`
+- Progress before failure:
+  - reached `epoch=3 step=30000/86790`
+  - validation at `step=30000` completed with `val_loss=0.1629`
+- Latest usable weight checkpoint:
+  - `checkpoints/weights/step_030000.pt`
+- Failure mode:
+  - training itself continued through the earlier optimizer OOM barrier
+  - crash happened while saving DeepSpeed / Accelerate training state
+  - repeated `PytorchStreamWriter` / `inline_container.cc` write failures under `checkpoints/state/step_030000`
+- Practical conclusion:
+  - weight checkpoints are usable
+  - for the next ablation runs, disable trainer state snapshots and keep weight-only checkpoints
+
+### LIBERO teacher ablation plan
+
+- Goal:
+  - isolate which teacher branch contributes most on LIBERO training + LIBERO-Plus evaluation
+- Ablation rule:
+  - set the matching lambda to `0`
+  - remove that branch from `gaussianwam.teacher_targets`
+  - mirror the same list into `data.train.gaussian_teacher.targets` to avoid loading unused tensors
+- Prepared configs:
+  - full teacher: `configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4.yaml`
+  - no dense: `configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_dense3d_1e-4.yaml`
+  - no depth: `configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_depth_1e-4.yaml`
+  - no alpha: `configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_alpha_1e-4.yaml`
+- Shared launch settings for the first ablation sweep:
+  - GPUs `0,5,6,7`
+  - conda env `fastwam`
+  - `batch_size=4`
+  - `gradient_accumulation_steps=2`
+  - `save_every=5000`
+  - `eval_every=500`
+  - `save_training_state=false`
+- Evaluation target:
+  - train on LIBERO
+  - evaluate selected checkpoints on LIBERO-Plus with the `fastwam-libero` environment
+
 ## 2026-06-09
 
 ### Current focus

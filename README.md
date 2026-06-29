@@ -464,3 +464,53 @@ Important note for the current codepath:
 - `FastWAM.save_checkpoint()` saves `mot`, `proprio_encoder`, and optional GaussianWAM heads.
 - The saved `mot.state_dict()` already includes the finetuned `video_expert` / `action_expert` weights under `mixtures.video.*` and `mixtures.action.*`, so the `.pt` file preserves the Stage 2 policy backbone for direct evaluation.
 - If you evaluate this checkpoint with a non-GaussianWAM config such as `task=robotwin_uncond_3cam_384_1e-4`, the loader will warn that GaussianWAM heads are ignored. This is expected and only affects the auxiliary distillation heads, not the main policy weights.
+
+## LIBERO Ablations
+
+For LIBERO GaussianWAM teacher ablations, the simplest and cleanest protocol is:
+
+- set the matching loss weight to `0`
+- remove that teacher branch from `gaussianwam.teacher_targets`
+- mirror the same target list in `data.train.gaussian_teacher.targets` to avoid loading unused teacher tensors
+
+Prepared task configs:
+
+- full teacher: `configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4.yaml`
+- no `dense_3d`: `configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_dense3d_1e-4.yaml`
+- no `depth`: `configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_depth_1e-4.yaml`
+- no `alpha`: `configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_alpha_1e-4.yaml`
+
+Current full-teacher reference run:
+
+- run dir:
+  `/data/zijianzhang/gaussianwam_data/runs/libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4/2026-06-17_12-19-41_gpus0-5-6-7_bs4_tmux`
+- latest weight checkpoint before the DeepSpeed state-save failure:
+  `checkpoints/weights/step_030000.pt`
+
+Recommended 4-GPU ablation launch template on GPUs `0,5,6,7`:
+
+```bash
+TASK=libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_dense3d_1e-4
+RUN_ID="$(date +%Y-%m-%d_%H-%M-%S)_gpus0-5-6-7_bs4_tmux"
+SESSION="${TASK}_$(date +%H%M%S)"
+LOG="/data/zijianzhang/gaussianwam_data/runs/${TASK}/${RUN_ID}/launch.log"
+mkdir -p "$(dirname "$LOG")"
+
+tmux new-session -d -s "$SESSION" \
+  "cd /data/zijianzhang/FastWAM && \
+   export CUDA_VISIBLE_DEVICES=0,5,6,7 RUN_ID=$RUN_ID LIBERO_DATA_ROOT=/data/zijianzhang/libero_mujoco3.3.2 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+   /data/miniconda3/bin/conda run --no-capture-output -n fastwam \
+   bash scripts/train_zero1.sh 4 \
+   task=${TASK} \
+   batch_size=4 \
+   gradient_accumulation_steps=2 \
+   save_every=5000 \
+   eval_every=500 \
+   save_training_state=false \
+   data.libero_text_cache_root=/data/zijianzhang/gaussianwam_data/data/text_embeds_cache/libero 2>&1 | tee $LOG"
+```
+
+Notes:
+
+- `save_training_state=false` disables DeepSpeed/Accelerate state snapshots and only keeps the weight checkpoints. This avoids the state-save failure that interrupted the full-teacher `step_030000` run.
+- Use the `fastwam` conda env for training and the `fastwam-libero` Python env for `LIBERO-Plus` evaluation.

@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4
+  - _self_
+
+gaussianwam:
+  teacher_targets: [dense_3d, alpha, valid_mask]
+  lambda_depth: 0.0
+
+data:
+  train:
+    gaussian_teacher:
+      targets: [dense_3d, alpha, valid_mask]

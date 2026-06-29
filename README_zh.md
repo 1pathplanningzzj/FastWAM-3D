@@ -365,6 +365,56 @@ tmux new-session -d -s "$SESSION" \
    bash scripts/train_zero1.sh 4 task=robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4 2>&1 | tee $LOG"
 ```
 
+### LIBERO teacher 消融
+
+对于 LIBERO GaussianWAM teacher 的消融，最推荐的做法是：
+
+- 把对应分支的 loss weight 设为 `0`
+- 同时从 `gaussianwam.teacher_targets` 里移除这一项
+- 再把 `data.train.gaussian_teacher.targets` 设成一致的列表，避免加载无用 teacher tensor
+
+已经准备好的 task config：
+
+- 全量 teacher：`configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4.yaml`
+- 去掉 `dense_3d`：`configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_dense3d_1e-4.yaml`
+- 去掉 `depth`：`configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_depth_1e-4.yaml`
+- 去掉 `alpha`：`configs/task/libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_alpha_1e-4.yaml`
+
+当前全量 teacher 参考 run：
+
+- run 目录：
+  `/data/zijianzhang/gaussianwam_data/runs/libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4/2026-06-17_12-19-41_gpus0-5-6-7_bs4_tmux`
+- 在 DeepSpeed state-save 失败前，最新可用的权重 checkpoint：
+  `checkpoints/weights/step_030000.pt`
+
+推荐的 4 卡消融启动模板（GPU `0,5,6,7`）：
+
+```bash
+TASK=libero_gaussianwam_stage2_fullft_firstframe_2cam224_no_dense3d_1e-4
+RUN_ID="$(date +%Y-%m-%d_%H-%M-%S)_gpus0-5-6-7_bs4_tmux"
+SESSION="${TASK}_$(date +%H%M%S)"
+LOG="/data/zijianzhang/gaussianwam_data/runs/${TASK}/${RUN_ID}/launch.log"
+mkdir -p "$(dirname "$LOG")"
+
+tmux new-session -d -s "$SESSION" \
+  "cd /data/zijianzhang/FastWAM && \
+   export CUDA_VISIBLE_DEVICES=0,5,6,7 RUN_ID=$RUN_ID LIBERO_DATA_ROOT=/data/zijianzhang/libero_mujoco3.3.2 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && \
+   /data/miniconda3/bin/conda run --no-capture-output -n fastwam \
+   bash scripts/train_zero1.sh 4 \
+   task=${TASK} \
+   batch_size=4 \
+   gradient_accumulation_steps=2 \
+   save_every=5000 \
+   eval_every=500 \
+   save_training_state=false \
+   data.libero_text_cache_root=/data/zijianzhang/gaussianwam_data/data/text_embeds_cache/libero 2>&1 | tee $LOG"
+```
+
+说明：
+
+- `save_training_state=false` 会关闭 DeepSpeed/Accelerate 的训练状态快照，只保留权重 checkpoint，可绕过这次全量 teacher 在 `step_030000` 后遇到的 state-save 失败。
+- 训练使用 `fastwam` 环境；`LIBERO-Plus` 评测建议用 `fastwam-libero` 环境。
+
 这个 focus3 配置会使用：
 
 - task 配置：`configs/task/robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4.yaml`
