@@ -1,0 +1,133 @@
+gaussianwam_root: ${oc.env:GAUSSIANWAM_ROOT,/data/zijianzhang/gaussianwam_data}
+robotwin_data_root: ${oc.env:ROBOTWIN_DATA_ROOT,${gaussianwam_root}/data/robotwin2.0}
+robotwin_dataset_root: ${robotwin_data_root}/robotwin2.0
+robotwin_text_cache_root: ${gaussianwam_root}/data/text_embeds_cache/robotwin
+gaussianwam_ckpt_root: ${oc.env:GAUSSIANWAM_CKPT_ROOT,${gaussianwam_root}/checkpoints/gaussianwam}
+
+output_dir: ${robotwin_data_root}/gaussian_teacher_cache
+split: train
+seed: 42
+device: cuda
+
+source:
+  dataset_dirs:
+    - ${robotwin_dataset_root}
+  episode_subset_manifest: data/robotwin2.0/subsets/full_clean_heuristic_first50.jsonl
+  subset_manifest: null
+  camera_keys: [cam_high, cam_left_wrist, cam_right_wrist]
+  num_frames: 33
+  action_video_freq_ratio: 4
+  val_set_proportion: 0.01
+  is_training_set: true
+  global_sample_stride: 1
+  target_frame_policy: first_video_frame
+  start_idx: 0
+  end_idx: null
+  max_samples: null
+
+vggt_omega:
+  checkpoint_path: /data/zijianzhang/VGGT-Omega/vggt_omega_1b_256_text.pt
+  image_resolution: 256
+  preprocess_mode: max_size
+  patch_size: 16
+  dtype: bf16
+  enable_alignment: true
+
+clip:
+  enabled: true
+  model_name: /data/zijianzhang/clip-vit-base-patch16
+  require_model: true
+  allow_fallback: false
+  local_files_only: true
+  feature_dim: 512
+  dense_enabled: true
+  dense_source: patch_tokens
+  fallback: image_stats_dense
+  compact:
+    require: false
+    checkpoint_path: ""
+
+text_cache:
+  dir: ${robotwin_text_cache_root}
+  context_len: 128
+  encoder_id: wan22ti2v5b
+  prompt_template: "A video recorded from a robot's point of view executing the following instruction: {task}"
+
+geometry:
+  conf_quantile: 0.1
+  min_depth: null
+  max_depth: null
+
+renderer:
+  backend: soft_point_depth_aware
+  radius_px: 2
+  sigma_min: 0.35
+  sigma_max: 2.0
+  alpha_eps: 1.0e-6
+  depth_weight: 1.0
+
+mosaic:
+  enabled: true
+  layout: robotwin
+  grid_size: [24, 20]
+
+gaussian:
+  feature_dim: 64
+  max_points: 5000
+  init_stride: 8
+  init_opacity: 0.3
+  init_scale: 0.02
+  optimize_steps: 50
+  render_height: 384
+  render_width: 320
+  target_grid_size: [24, 20]
+  per_view_balanced_sampling: true
+  optimize_feature: true
+  optimize_xyz: true
+  optimize_scale: true
+  optimize_opacity: true
+  optimize_color: false
+  lr_xyz: 1.0e-4
+  lr_scale: 1.0e-3
+  lr_opacity: 1.0e-2
+  lr_feature: 1.0e-3
+  init_feature_source: clip_dense_target
+  alpha_valid_threshold: 1.0e-4
+  min_scale: 1.0e-4
+  max_scale: 0.2
+  grad_clip: 1.0
+  min_render_valid_ratio: 0.15
+  min_teacher_valid_ratio: 0.2
+  min_teacher_render_overlap_ratio: 0.1
+  min_compact_cosine: 0.05
+  max_compact_cosine_drop: 0.05
+
+loss:
+  lambda_depth: 1.0
+  lambda_compact: 0.1
+  lambda_alpha: 0.01
+  lambda_alpha_outside: 0.01
+  lambda_scale: 0.001
+  lambda_xyz: 0.0
+  lambda_feature_anchor: 0.1
+
+quality:
+  require_frozen_feature_z: false
+  min_render_valid_ratio: 0.15
+  min_teacher_valid_ratio: 0.2
+  min_teacher_render_overlap_ratio: 0.1
+  min_mosaic_valid_ratio: 0.05
+  min_compact_cosine: 0.05
+  max_compact_cosine_drop: 0.05
+  max_feature_anchor_loss: 0.02
+
+cache:
+  version: 4
+  overwrite: false
+  atomic_write: true
+  save_gaussian_state: true
+  save_debug_images: false
+  save_dense_feature_target: true
+  save_raw_clip_feature: false
+  alpha_valid_threshold: 1.0e-4
+  namespace: gaussian_vggt256text_3d_fullclean_first50_firstframe_all_v1

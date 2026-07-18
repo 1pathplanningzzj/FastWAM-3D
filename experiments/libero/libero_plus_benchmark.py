@@ -99,6 +99,26 @@ def normalize_plus_category(category: str | None) -> str | None:
     return PLUS_CATEGORY_ALIASES.get(key, normalized)
 
 
+def normalize_plus_categories(categories) -> tuple[str, ...]:
+    if categories is None:
+        return ()
+
+    if isinstance(categories, str):
+        raw_items = re.split(r"[,;\n]", categories)
+    else:
+        raw_items = list(categories)
+
+    normalized_items: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        normalized = normalize_plus_category(item)
+        if normalized is None or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_items.append(normalized)
+    return tuple(normalized_items)
+
+
 def short_plus_category(category: str | None) -> str:
     if category is None:
         return "Unknown"
@@ -280,11 +300,13 @@ class LiberoPlusBenchmark:
         *,
         plus_root: str | Path = DEFAULT_LIBERO_PLUS_ROOT,
         category: str | None = None,
+        exclude_categories=None,
         task_classification_path: str | Path | None = None,
     ):
         self.name = str(suite_name)
         self.plus_root = Path(plus_root).expanduser().resolve()
         self.category = normalize_plus_category(category)
+        self.exclude_categories = set(normalize_plus_categories(exclude_categories))
         self.task_classification_path = Path(
             task_classification_path or self.plus_root / "benchmark" / "task_classification.json"
         ).expanduser().resolve()
@@ -309,10 +331,13 @@ class LiberoPlusBenchmark:
                     f"Available: {sorted(classification.keys())}"
                 )
             records = classification[suite_name]
-            if self.category is not None:
-                records = [record for record in records if record.get("category") == self.category]
 
             for record in records:
+                record_category = normalize_plus_category(record.get("category"))
+                if self.category is not None and record_category != self.category:
+                    continue
+                if record_category in self.exclude_categories:
+                    continue
                 task_name = str(record["name"])
                 language_filename = _resolve_bddl_file(suite_name, task_name)
                 tasks.append(
@@ -326,7 +351,7 @@ class LiberoPlusBenchmark:
                         else language_filename,
                         language_bddl_file=language_filename,
                         init_states_file=f"{task_name}.pruned_init",
-                        plus_category=str(record.get("category", "")),
+                        plus_category=record_category or str(record.get("category", "")),
                         plus_difficulty_level=record.get("difficulty_level"),
                         plus_original_id=int(record.get("id", 0)),
                     )

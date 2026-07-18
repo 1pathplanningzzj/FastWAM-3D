@@ -53,6 +53,8 @@ def _is_blocked_override(raw_override: str) -> bool:
         "ckpt",
         "gpu_id",
         "EVALUATION.task_name",
+        "EVALUATION.task_names",
+        "EVALUATION.task_names_file",
         "EVALUATION.task_config",
         "EVALUATION.output_dir",
     }:
@@ -62,6 +64,19 @@ def _is_blocked_override(raw_override: str) -> bool:
 
 def _collect_worker_overrides() -> list[str]:
     return [ov for ov in HydraConfig.get().overrides.task if not _is_blocked_override(ov)]
+
+
+def _resolve_gpu_ids(num_gpus: int) -> list[int]:
+    raw_gpu_ids = os.environ.get("ROBOTWIN_GPU_IDS", "").strip()
+    if raw_gpu_ids == "":
+        return list(range(num_gpus))
+    gpu_ids = [int(part.strip()) for part in raw_gpu_ids.split(",") if part.strip() != ""]
+    if len(gpu_ids) != num_gpus:
+        raise ValueError(
+            f"ROBOTWIN_GPU_IDS has {len(gpu_ids)} entries but MULTIRUN.num_gpus={num_gpus}: "
+            f"{raw_gpu_ids}"
+        )
+    return gpu_ids
 
 
 def _load_all_tasks() -> list[str]:
@@ -81,6 +96,22 @@ def _load_all_tasks() -> list[str]:
         seen.add(task)
         dedup_tasks.append(task)
     return dedup_tasks
+
+
+def _load_task_names_file(path_str: str) -> list[str]:
+    path = _resolve_path(path_str, base=PROJECT_ROOT)
+    if not path.exists():
+        raise FileNotFoundError(f"Task names file not found: {path}")
+    tasks: list[str] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            task = line.strip()
+            if task == "" or task.startswith("#"):
+                continue
+            tasks.append(task)
+    if len(tasks) == 0:
+        raise ValueError(f"No task names found in: {path}")
+    return tasks
 
 
 def _parse_success_rate(result_file: Path) -> float:
@@ -152,7 +183,7 @@ def main(cfg: DictConfig):
     max_tasks_per_gpu = int(cfg.MULTIRUN.max_tasks_per_gpu)
     if max_tasks_per_gpu <= 0:
         raise ValueError("`MULTIRUN.max_tasks_per_gpu` must be > 0.")
-    gpu_ids = list(range(num_gpus))
+    gpu_ids = _resolve_gpu_ids(num_gpus)
 
     output_dir = _resolve_path(str(cfg.EVALUATION.output_dir), base=PROJECT_ROOT)
     run_ts = output_dir.name
@@ -166,8 +197,14 @@ def main(cfg: DictConfig):
     summary_csv = run_output_dir / "summary.csv"
     summary_json = run_output_dir / "summary.json"
 
+    task_names_file = cfg.EVALUATION.get("task_names_file", None)
+    task_names_cfg = cfg.EVALUATION.get("task_names", None)
     task_name_cfg = cfg.EVALUATION.task_name
-    if task_name_cfg is None or str(task_name_cfg).strip() == "":
+    if task_names_file is not None and str(task_names_file).strip() != "":
+        tasks = _load_task_names_file(str(task_names_file))
+    elif task_names_cfg is not None:
+        tasks = [str(task) for task in task_names_cfg]
+    elif task_name_cfg is None or str(task_name_cfg).strip() == "":
         tasks = _load_all_tasks()
     else:
         tasks = [str(task_name_cfg)]

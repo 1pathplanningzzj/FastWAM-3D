@@ -26,6 +26,7 @@ EVALUATION:
   binarize_gripper: true
   use_action_ensembler: false
   visualize_future_video: false
+  step_budget_protocol: fastwam
 
   # Action inference
   action_horizon: null
@@ -42,6 +43,7 @@ EVALUATION:
   plus_root: null
   plus_config_dir: null
   plus_category: null
+  exclude_categories: null
   plus_task_classification_path: null
   task_plan_file: null
 

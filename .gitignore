@@ -14,6 +14,17 @@ evaluate_results/
 # ai coding
 .codex/
 .claude/
+setup_codex.sh
+
+# Local caches / generated artifacts
+.hf_cache/
+**/.hf_cache/
+.vendor/
+artifacts/
+debug/
+None/
+manager_config.yaml
+third_party/RoboTwin/policy/fastwam_policy
 
 # Data types
 *.jit

@@ -21,6 +21,7 @@ from experiments.libero.libero_plus_benchmark import (
     LiberoPlusBenchmark,
     configure_libero_plus_runtime,
     normalize_plus_category,
+    normalize_plus_categories,
     short_plus_category,
 )
 from fastwam.utils.config_resolvers import register_default_resolvers
@@ -139,16 +140,19 @@ def _build_plus_task_suite(
     category: str | None,
 ) -> LiberoPlusBenchmark:
     task_classification_path = cfg.EVALUATION.get("plus_task_classification_path", None)
+    exclude_categories = normalize_plus_categories(cfg.EVALUATION.get("exclude_categories", None))
     task_suite = LiberoPlusBenchmark(
         suite_name,
         plus_root=plus_root,
         category=category,
+        exclude_categories=exclude_categories,
         task_classification_path=task_classification_path,
     )
     logging.info(
-        "LIBERO-Plus suite=%s category=%s tasks=%d",
+        "LIBERO-Plus suite=%s category=%s exclude_categories=%s tasks=%d",
         suite_name,
         category or "<all>",
+        ",".join(exclude_categories) if exclude_categories else "<none>",
         task_suite.n_tasks,
     )
     return task_suite
@@ -222,6 +226,7 @@ def _run_one_plus_task(
         "duration": 0,
         "plus_category": task.plus_category,
         "plus_category_filter": category_filter,
+        "plus_exclude_categories": list(normalize_plus_categories(cfg.EVALUATION.get("exclude_categories", None))),
         "plus_category_short": short_plus_category(task.plus_category),
         "plus_task_name": task.name,
         "plus_original_id": task.plus_original_id,
@@ -275,6 +280,8 @@ def run_plus_task_ids(
     *,
     task_ids: list[int],
 ) -> list[dict]:
+    resolved_plus_root, _, _, category = _prepare_plus_runtime(cfg)
+
     from accelerate import PartialState
 
     from experiments.libero.eval_libero_single import _validate_visualize_future_video_cfg
@@ -297,7 +304,6 @@ def run_plus_task_ids(
     partial_state = PartialState()
     partial_state.config = cfg
 
-    resolved_plus_root, _, _, category = _prepare_plus_runtime(cfg)
     model, processor, model_device, _ = _load_eval_components(cfg)
     action_horizon, input_w, input_h = _get_rollout_dimensions(cfg)
     task_suite = _build_plus_task_suite(
@@ -336,6 +342,8 @@ def run_plus_task_plan(
     cfg: DictConfig,
     task_specs: list[tuple[str, int]],
 ) -> list[dict]:
+    resolved_plus_root, _, _, category = _prepare_plus_runtime(cfg)
+
     from accelerate import PartialState
 
     from experiments.libero.eval_libero_single import _validate_visualize_future_video_cfg
@@ -358,7 +366,6 @@ def run_plus_task_plan(
     partial_state = PartialState()
     partial_state.config = cfg
 
-    resolved_plus_root, _, _, category = _prepare_plus_runtime(cfg)
     model, processor, model_device, _ = _load_eval_components(cfg)
     action_horizon, input_w, input_h = _get_rollout_dimensions(cfg)
 

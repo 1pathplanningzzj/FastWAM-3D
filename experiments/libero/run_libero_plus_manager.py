@@ -20,6 +20,7 @@ from experiments.libero.libero_plus_benchmark import (
     LiberoPlusBenchmark,
     configure_libero_plus_runtime,
     normalize_plus_category,
+    normalize_plus_categories,
     short_plus_category,
 )
 
@@ -80,6 +81,7 @@ def _grouped_task_specs(
     plus_root: Path,
     plus_config_dir: Path,
     plus_category: str | None,
+    exclude_categories: tuple[str, ...],
 ) -> list[tuple[str, int, str]]:
     configure_libero_plus_runtime(plus_root, plus_config_dir)
     grouped: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
@@ -89,6 +91,7 @@ def _grouped_task_specs(
             suite_name,
             plus_root=plus_root,
             category=plus_category,
+            exclude_categories=exclude_categories,
         )
         for task_id, task in enumerate(task_suite.tasks):
             grouped[short_plus_category(task.plus_category)].append((suite_name, task_id, task.name))
@@ -140,6 +143,7 @@ def _start_tmux_workers(
     session_name = "libero_plus_worker"
     python_bin = os.environ.get("PYTHON_BIN", "/data/miniconda3/envs/fastwam-libero/bin/python")
     mplconfigdir = os.environ.get("MPLCONFIGDIR", "/tmp/matplotlib-fastwam-libero")
+    numba_disable_jit = os.environ.get("NUMBA_DISABLE_JIT", "1")
     mujoco_gl = os.environ.get("MUJOCO_GL", "egl")
     pyopengl_platform = os.environ.get("PYOPENGL_PLATFORM", "egl")
     extra_args = " ".join(shlex.quote(arg) for arg in extra_overrides)
@@ -155,6 +159,7 @@ def _start_tmux_workers(
             f"source ~/.bashrc && cd {shlex.quote(str(project_root))} && "
             f"CUDA_VISIBLE_DEVICES={shlex.quote(gpu_id)} "
             f"MPLCONFIGDIR={shlex.quote(mplconfigdir)} "
+            f"NUMBA_DISABLE_JIT={shlex.quote(numba_disable_jit)} "
             f"MUJOCO_GL={shlex.quote(mujoco_gl)} "
             f"PYOPENGL_PLATFORM={shlex.quote(pyopengl_platform)} "
             f"LIBERO_PLUS_ROOT={shlex.quote(str(plus_root))} "
@@ -197,6 +202,9 @@ def main(cfg: DictConfig):
     plus_category = normalize_plus_category(
         cfg.EVALUATION.get("plus_category", os.environ.get("LIBERO_PLUS_CATEGORY"))
     )
+    exclude_categories = normalize_plus_categories(
+        cfg.EVALUATION.get("exclude_categories", os.environ.get("LIBERO_PLUS_EXCLUDE_CATEGORIES"))
+    )
 
     output_dir = Path(os.path.expanduser(os.path.expandvars(str(cfg.EVALUATION.output_dir))))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -208,12 +216,18 @@ def main(cfg: DictConfig):
         plus_root=plus_root,
         plus_config_dir=plus_config_dir,
         plus_category=plus_category,
+        exclude_categories=exclude_categories,
     )
     plan_files = _write_worker_plans(output_dir, gpu_ids, task_specs)
 
     summary = output_dir / "worker_plan_summary.txt"
     with summary.open("w", encoding="utf-8") as f:
         f.write(f"total_tasks={len(task_specs)}\n")
+        f.write(
+            "exclude_categories="
+            + (",".join(exclude_categories) if exclude_categories else "<none>")
+            + "\n"
+        )
         for gpu_id, plan_file in zip(gpu_ids, plan_files):
             count = len([line for line in plan_file.read_text(encoding='utf-8').splitlines() if line.strip()])
             f.write(f"gpu={gpu_id} plan={plan_file.name} tasks={count}\n")

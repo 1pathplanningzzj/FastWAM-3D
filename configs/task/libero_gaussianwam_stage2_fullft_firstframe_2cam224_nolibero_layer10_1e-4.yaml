@@ -1,0 +1,6 @@
+# @package _global_
+
+defaults:
+  - libero_gaussianwam_stage2_fullft_firstframe_2cam224_1e-4
+  - _self_
+

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
 import torch
@@ -1358,6 +1359,40 @@ class FastWAM(torch.nn.Module):
 
     def load_checkpoint(self, path, optimizer=None):
         payload = torch.load(path, map_location="cpu")
+        if payload.get("__fastwam_checkpoint_format__") == "fastwam_sharded_checkpoint_v1":
+            from safetensors.torch import load_file as load_safetensors_file
+
+            checkpoint_dir = Path(path).resolve().parent
+            shard_dir = checkpoint_dir / str(payload["shard_dir"])
+
+            def _load_sharded_state_dict(entries):
+                state_dict = {}
+                for entry in entries:
+                    chunks = []
+                    for chunk in entry["chunks"]:
+                        shard_path = shard_dir / chunk["file"]
+                        tensor = load_safetensors_file(str(shard_path), device="cpu")[chunk.get("tensor", "data")]
+                        chunks.append(tensor.reshape(-1))
+                    flat = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=0)
+                    state_dict[entry["key"]] = flat.reshape(tuple(entry["shape"]))
+                return state_dict
+
+            components = payload.get("components", {})
+            payload = {
+                "step": payload.get("step"),
+                "torch_dtype": payload.get("torch_dtype"),
+            }
+            if "mot" in components:
+                payload["mot"] = _load_sharded_state_dict(components["mot"])
+            if "proprio_encoder" in components:
+                payload["proprio_encoder"] = _load_sharded_state_dict(components["proprio_encoder"])
+            if "gaussianwam" in components:
+                gaussian_meta = components["gaussianwam"]
+                gaussian_payload = {"config": gaussian_meta.get("config")}
+                for key in ("student_proj", "depth_head", "alpha_head"):
+                    if key in gaussian_meta:
+                        gaussian_payload[key] = _load_sharded_state_dict(gaussian_meta[key])
+                payload["gaussianwam"] = gaussian_payload
         if "mot" in payload:
             self.mot.load_state_dict(payload["mot"], strict=False)
         elif "dit" in payload:

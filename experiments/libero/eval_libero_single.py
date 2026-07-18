@@ -41,7 +41,7 @@ from fastwam.utils.config_resolvers import register_default_resolvers
 from fastwam.utils.pytorch_utils import set_global_seed
 from fastwam.datasets.lerobot.robot_video_dataset import DEFAULT_PROMPT
 from libero.libero import benchmark
-from action_ensembler import ActionEnsembler
+from experiments.libero.action_ensembler import ActionEnsembler
 
 register_default_resolvers()
 
@@ -472,14 +472,25 @@ def _predict_action_chunk(
     return action, imgs, predicted_future_frames
 
 
-def _get_max_steps(task_suite_name: str) -> int:
-    suite_steps = {
-        "libero_spatial": 400,
-        "libero_object": 400,
-        "libero_goal": 400,
-        "libero_10": 700,
-        "libero_90": 700,
-    }
+def _get_max_steps(cfg: DictConfig) -> int:
+    task_suite_name = str(cfg.EVALUATION.task_suite_name)
+    protocol = str(cfg.EVALUATION.get("step_budget_protocol", "fastwam")).strip().lower()
+    if protocol == "vlajepa":
+        suite_steps = {
+            "libero_spatial": 250,
+            "libero_object": 280,
+            "libero_goal": 300,
+            "libero_10": 520,
+            "libero_90": 400,
+        }
+    else:
+        suite_steps = {
+            "libero_spatial": 400,
+            "libero_object": 400,
+            "libero_goal": 400,
+            "libero_10": 700,
+            "libero_90": 700,
+        }
     if task_suite_name not in suite_steps:
         raise ValueError(f"Unknown task suite: {task_suite_name}")
     return suite_steps[task_suite_name]
@@ -499,7 +510,7 @@ def run_single_episode(
     input_h: int,
     model_device: str,
 ) -> tuple[bool, list, list[dict[str, Any]], Optional[float]]:
-    max_steps = _get_max_steps(cfg.EVALUATION.task_suite_name)
+    max_steps = _get_max_steps(cfg)
     replan_steps = int(cfg.EVALUATION.get("replan_steps", 5))
     num_steps_wait = int(cfg.EVALUATION.get("num_steps_wait", 5))
     use_action_ensembler = bool(cfg.EVALUATION.get("use_action_ensembler", False))

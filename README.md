@@ -224,7 +224,53 @@ The current code supports both:
 Required runtime root:
 
 ```bash
-export LIBERO_PLUS_ROOT=/data/zijianzhang/libero_datasets/LIBERO-plus/libero/libero
+export LIBERO_PLUS_ROOT=/data/zijianzhang/LIBERO-plus/libero/libero
+```
+
+Verified patched eval env on this machine:
+
+```bash
+export PYTHON_BIN=/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/python
+export MPLCONFIGDIR=/tmp/matplotlib-fastwam-libero
+export NUMBA_DISABLE_JIT=1
+```
+
+This patched env was aligned against `libero_plus_eval_env_pip_freeze.txt`.
+The current local freeze is saved in `libero_plus_eval_env_pip_freeze.local.txt`.
+The remaining freeze-level differences are intentional / benign for the current FastWAM eval path:
+
+- friend freeze installs `LIBERO-plus` from a git URL, while this machine uses an editable local checkout at `/data/zijianzhang/LIBERO-plus`
+- friend freeze includes `flash-attn`, but the current FastWAM `LIBERO` / `LIBERO-Plus` eval path uses PyTorch `scaled_dot_product_attention` and does not import `flash_attn`
+
+Rebuild the patched env from `fastwam-libero`:
+
+```bash
+conda create -y -n fastwam-libero-plus-eval-patched --clone fastwam-libero
+/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/pip install \
+  -r libero_plus_eval_env_from_fastwam_libero.stage1.txt \
+  -i https://pypi.tuna.tsinghua.edu.cn/simple
+/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/pip install \
+  -r libero_plus_eval_env_from_fastwam_libero.stage2-heavy.txt \
+  -i https://pypi.tuna.tsinghua.edu.cn/simple \
+  --extra-index-url https://download.pytorch.org/whl/cu121
+/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/pip freeze \
+  > libero_plus_eval_env_pip_freeze.local.txt
+```
+
+Quick runtime validation:
+
+```bash
+NUMBA_DISABLE_JIT=1 \
+MPLCONFIGDIR=/tmp/matplotlib-fastwam-libero \
+LIBERO_PLUS_ROOT=/data/zijianzhang/LIBERO-plus/libero/libero \
+/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/python - <<'PY'
+from experiments.libero.libero_plus_benchmark import configure_libero_plus_runtime
+configure_libero_plus_runtime('/data/zijianzhang/LIBERO-plus/libero/libero')
+import robosuite
+import libero.libero.benchmark
+print("robosuite OK")
+print("libero benchmark OK")
+PY
 ```
 
 Recommended protocol for comparing against VLA-JEPA:
@@ -237,10 +283,11 @@ Recommended protocol for comparing against VLA-JEPA:
 Example full 4-GPU eval:
 
 ```bash
+NUMBA_DISABLE_JIT=1 \
 MPLCONFIGDIR=/tmp/matplotlib-fastwam-libero \
 CUDA_VISIBLE_DEVICES=0,5,6,7 \
-LIBERO_PLUS_ROOT=/data/zijianzhang/libero_datasets/LIBERO-plus/libero/libero \
-python experiments/libero/run_libero_plus_manager.py \
+LIBERO_PLUS_ROOT=/data/zijianzhang/LIBERO-plus/libero/libero \
+$PYTHON_BIN experiments/libero/run_libero_plus_manager.py \
   task=libero_gaussianwam_stage2_current_2cam224_1e-4 \
   ckpt=/data/zijianzhang/gaussianwam_data/runs/libero_gaussianwam_stage2_current_2cam224_1e-4/2026-06-14_12-41-35_gpus0-5-6-7_resume_from10k_v2/checkpoints/weights/step_016000.pt \
   EVALUATION.output_dir=/data/zijianzhang/FastWAM/evaluate_results/libero/libero_gaussianwam_stage2_current_2cam224_1e-4/20260615_plus_step016000_gpus0-5-6-7_1trial \
@@ -250,12 +297,72 @@ python experiments/libero/run_libero_plus_manager.py \
   EVALUATION.num_trials=1
 ```
 
+Official released FastWAM checkpoint on `LIBERO-Plus` with the patched env:
+
+```bash
+NUMBA_DISABLE_JIT=1 \
+MPLCONFIGDIR=/tmp/matplotlib-fastwam-libero \
+CUDA_VISIBLE_DEVICES=1,2,3,4 \
+LIBERO_PLUS_ROOT=/data/zijianzhang/LIBERO-plus/libero/libero \
+PYTHON_BIN=/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/python \
+/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/python \
+experiments/libero/run_libero_plus_manager.py \
+  task=libero_uncond_2cam224_1e-4 \
+  ckpt=/data/zijianzhang/gaussianwam_data/checkpoints/fastwam_release/libero_uncond_2cam224.pt \
+  EVALUATION.dataset_stats_path=/data/zijianzhang/gaussianwam_data/checkpoints/fastwam_release/libero_uncond_2cam224_dataset_stats.json \
+  EVALUATION.output_dir=/data/zijianzhang/FastWAM/evaluate_results/libero/libero_uncond_2cam224_1e-4/20260630_plus_official_gpus1-2-3-4_1trial_patchedenv \
+  EVALUATION.num_trials=1 \
+  MULTIRUN.num_gpus=4 \
+  MULTIRUN.max_tasks_per_gpu=2 \
+  MULTIRUN.task_suite_names='[libero_10,libero_goal,libero_spatial,libero_object]'
+```
+
+Friend-aligned comparison protocol for the released FastWAM checkpoint:
+
+- keep the patched env above
+- explicitly use `seed=0`
+- switch to `EVALUATION.step_budget_protocol=vlajepa`
+- exclude `Sensor Noise`
+- use the original training-run stats file instead of the repackaged release copy:
+  `/data/zijianzhang/gaussianwam_data/runs/libero_gaussianwam_stage2_current_2cam224_1e-4/2026-06-14_12-41-35_gpus0-5-6-7_resume_from10k_v2/dataset_stats.json`
+
+Example 8-GPU launch:
+
+```bash
+cd /data/zijianzhang/FastWAM
+NUMBA_DISABLE_JIT=1 \
+MPLCONFIGDIR=/tmp/matplotlib-fastwam-libero \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+LIBERO_PLUS_ROOT=/data/zijianzhang/LIBERO-plus/libero/libero \
+PYTHON_BIN=/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/python \
+/data/miniconda3/envs/fastwam-libero-plus-eval-patched/bin/python \
+experiments/libero/run_libero_plus_manager.py \
+  task=libero_uncond_2cam224_1e-4 \
+  ckpt=/data/zijianzhang/gaussianwam_data/checkpoints/fastwam_release/libero_uncond_2cam224.pt \
+  seed=0 \
+  EVALUATION.dataset_stats_path=/data/zijianzhang/gaussianwam_data/runs/libero_gaussianwam_stage2_current_2cam224_1e-4/2026-06-14_12-41-35_gpus0-5-6-7_resume_from10k_v2/dataset_stats.json \
+  EVALUATION.exclude_categories='Sensor Noise' \
+  EVALUATION.step_budget_protocol=vlajepa \
+  EVALUATION.output_dir=/data/zijianzhang/FastWAM/evaluate_results/libero/libero_uncond_2cam224_1e-4/20260630_plus_official_gpus0-1-2-3-4-5-6-7_1trial_friend_aligned \
+  EVALUATION.num_trials=1 \
+  MULTIRUN.num_gpus=8 \
+  MULTIRUN.max_tasks_per_gpu=2 \
+  MULTIRUN.task_suite_names='[libero_10,libero_goal,libero_spatial,libero_object]'
+```
+
+Monitor the workers with:
+
+```bash
+tmux attach -t libero_plus_worker
+```
+
 Single-task debug example:
 
 ```bash
+NUMBA_DISABLE_JIT=1 \
 MPLCONFIGDIR=/tmp/matplotlib-fastwam-libero \
-LIBERO_PLUS_ROOT=/data/zijianzhang/libero_datasets/LIBERO-plus/libero/libero \
-python experiments/libero/eval_libero_plus.py \
+LIBERO_PLUS_ROOT=/data/zijianzhang/LIBERO-plus/libero/libero \
+$PYTHON_BIN experiments/libero/eval_libero_plus.py \
   task=libero_gaussianwam_stage2_current_2cam224_1e-4 \
   ckpt=/path/to/step.pt \
   EVALUATION.task_suite_name=libero_spatial \
@@ -269,10 +376,16 @@ You can optionally restrict eval to one perturbation category:
 EVALUATION.plus_category='Background Textures'
 ```
 
+Or exclude one or more perturbation categories from the full run:
+
+```bash
+EVALUATION.exclude_categories='Sensor Noise'
+```
+
 Category summary helper:
 
 ```bash
-python experiments/libero/summarize_libero_plus_results.py \
+$PYTHON_BIN experiments/libero/summarize_libero_plus_results.py \
   --output_dir /path/to/libero_plus_eval_dir
 ```
 
@@ -298,8 +411,8 @@ Notes for this repo:
 - `LIBERO-Plus` must import its own Python package tree, not only its data root.
 - The runtime helper in [`experiments/libero/libero_plus_benchmark.py`](./experiments/libero/libero_plus_benchmark.py)
   injects the correct repo root into `sys.path` and clears stale `libero.*` imports.
-- The local eval environment may not have the `wand` dependency used by LIBERO-Plus motion blur corruptions.
-  The helper installs a minimal fallback stub so non-`wand` tasks can still run.
+- The patched eval env now ships `Wand==0.6.13`; the fallback stub still exists as a last-resort safeguard.
+- `NUMBA_DISABLE_JIT=1` is required in the patched env because `robosuite` hits a `numba` cache failure during import on this machine.
 - `LIBERO-Plus` environment code expects `bddl_file_name` as `str`, so
   [`experiments/libero/libero_utils.py`](./experiments/libero/libero_utils.py)
   now converts `Path` to `str` before constructing the env.
@@ -450,6 +563,57 @@ This focused config uses:
 - task config: `configs/task/robotwin_gaussianwam_stage2_focus3_current_3cam_384_1e-4.yaml`
 - subset manifest: `data/robotwin2.0/subsets/stage2_focus3_switch_microwave_mug.jsonl`
 - selected episodes matched by keywords: `switch`, `microwave`, `mug`
+
+RobotWin clean-only first-frame teacher recipe (`50` clean episodes per `550`-episode task block):
+
+- subset builder: `scripts/gaussianwam/build_robotwin_clean_heuristic_subset.py`
+- selected manifest: `data/robotwin2.0/subsets/full_clean_heuristic_first50.jsonl`
+- inspection report: `data/robotwin2.0/subsets/full_clean_heuristic_first50.report.json`
+- contrast manifest: `data/robotwin2.0/subsets/full_clean_heuristic_last50.jsonl`
+- Stage 1 cache config: `configs/gaussianwam/stage1_robotwin_fullclean_first50_firstframe_all.yaml`
+- Stage 2 train config: `configs/task/robotwin_gaussianwam_stage2_fullclean_first50_fullft_firstframe_current_3cam_384_1e-4.yaml`
+
+The `first50` choice is a heuristic reconstructed from the packed `27500`-episode FastWAM dataset:
+
+- the dataset is organized as `50` task blocks of `550` episodes each
+- official RoboTwin `demo_clean` is `50` episodes per task, while randomized data is larger
+- spot-checking the head-camera first frames shows the first `50` episodes in a block are clean white-table scenes, while the last `50` are cluttered randomized scenes
+
+Generate or refresh the manifests:
+
+```bash
+python scripts/gaussianwam/build_robotwin_clean_heuristic_subset.py \
+  --output data/robotwin2.0/subsets/full_clean_heuristic_first50.jsonl \
+  --report data/robotwin2.0/subsets/full_clean_heuristic_first50.report.json
+
+python scripts/gaussianwam/build_robotwin_clean_heuristic_subset.py \
+  --position last \
+  --output data/robotwin2.0/subsets/full_clean_heuristic_last50.jsonl \
+  --report data/robotwin2.0/subsets/full_clean_heuristic_last50.report.json
+```
+
+Launch the clean-only 8-GPU teacher cache job:
+
+```bash
+cd /data/zijianzhang/FastWAM
+export GAUSSIANWAM_ROOT=/data/zijianzhang/gaussianwam_data
+export ROBOTWIN_DATA_ROOT=/data/zijianzhang/gaussianwam_data/data/robotwin2.0
+export PYTHON_BIN=/data/miniconda3/envs/fastwam/bin/python
+export CONFIG=configs/gaussianwam/stage1_robotwin_fullclean_first50_firstframe_all.yaml
+export GPU_LIST=0,1,2,3,4,5,6,7
+export NUM_WORKERS=8
+
+tmux new-session -d -s robotwin_teacher_fullclean_first50_firstframe \
+  'cd /data/zijianzhang/FastWAM && \
+   export GAUSSIANWAM_ROOT=/data/zijianzhang/gaussianwam_data ROBOTWIN_DATA_ROOT=/data/zijianzhang/gaussianwam_data/data/robotwin2.0 PYTHON_BIN=/data/miniconda3/envs/fastwam/bin/python CONFIG=configs/gaussianwam/stage1_robotwin_fullclean_first50_firstframe_all.yaml GPU_LIST=0,1,2,3,4,5,6,7 NUM_WORKERS=8 && \
+   bash scripts/gaussianwam/run_robotwin_firstframe_cache_8gpu.sh'
+```
+
+Train Stage 2 on the same clean-only subset after the cache finishes:
+
+```bash
+bash scripts/train_zero1.sh 8 task=robotwin_gaussianwam_stage2_fullclean_first50_fullft_firstframe_current_3cam_384_1e-4
+```
 
 Inference with a saved Stage 2 weight checkpoint:
 
